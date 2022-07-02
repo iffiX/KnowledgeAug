@@ -1,0 +1,44 @@
+{
+    "configs": [
+        {
+            "base_type": "sentence-transformers/all-MiniLM-L6-v2",
+            "embedder_base_type": "sentence-transformers/all-MiniLM-L6-v2",
+            "batch_size": 1,
+            "epochs": 20,
+            "pretrain_epochs": 5,
+            "pretrain_learning_rate": 5e-5,
+            "rl_actor_learning_rate": 5e-5,
+            "rl_critic_learning_rate": 5e-5,
+            "rl_discriminator_learning_rate": 5e-5,
+            "load": false,
+            "max_seq_length": 512,
+            "optimizer_class": "AdamW",
+            "use_matcher": true,
+            "matcher_mode": "embedding",
+            "matcher_config": {
+                "question_match_max_times": 1000,
+                "question_match_max_depth": 1,
+                "question_match_edge_top_k": 10,
+                "question_match_source_context_range": 1,
+                "question_select_max_edges": 2,
+                "question_select_discard_edges_if_rank_below": 0.4,
+                "choices_match_max_times": 1000,
+                "choices_match_max_depth": 1,
+                "choices_match_edge_top_k": 10,
+                "choices_match_source_context_range": 1,
+                "choices_select_max_edges": 2,
+                "choices_select_discard_edges_if_rank_below": 0.4
+            },
+            "replay_size": 10000,
+            "state_delimeter": ", ",
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "openbook_qa_gail"
+    ],
+    "working_directory": "/home/muhan/data/workspace/kb_encoder/train_ob_qa_gail"
+}
