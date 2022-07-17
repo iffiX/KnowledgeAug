@@ -41,6 +41,8 @@ PYBIND11_MODULE(matcher, m) {
             .def_readonly("edges", &KnowledgeBase::edges)
             .def_readonly("nodes", &KnowledgeBase::nodes)
             .def_readonly("relationships", &KnowledgeBase::relationships)
+            .def_readonly("is_edge_disabled", &KnowledgeBase::isEdgeDisabled)
+            .def_readonly("is_node_composite", &KnowledgeBase::isNodeComposite)
             .def_readonly("raw_relationships", &KnowledgeBase::rawRelationships)
             .def_readonly("node_embedding_file_name", &KnowledgeBase::nodeEmbeddingFileName)
             .def_readwrite("tokenized_nodes", &KnowledgeBase::tokenizedNodes)
@@ -50,8 +52,12 @@ PYBIND11_MODULE(matcher, m) {
             .def("disable_all_edges", &KnowledgeBase::disableAllEdges)
             .def("disable_edges_with_weight_below", &KnowledgeBase::disableEdgesWithWeightBelow)
             .def("disable_edges_of_nodes", &KnowledgeBase::disableEdgesOfNodes)
-            .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships)
-            .def("enable_edges_of_relationships", &KnowledgeBase::enableEdgesOfRelationships)
+            .def("disable_edges_of_relationships", &KnowledgeBase::disableEdgesOfRelationships,
+                 py::arg("relationships"),
+                 py::arg("exclude_composite_nodes") = true)
+            .def("enable_edges_of_relationships", &KnowledgeBase::enableEdgesOfRelationships,
+                 py::arg("relationships"),
+                 py::arg("exclude_composite_nodes") = true)
             .def("find_nodes", &KnowledgeBase::findNodes,
                  py::arg("nodes"),
                  py::arg("quiet") = false)
@@ -113,7 +119,10 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("max_depth_for_each_node") = 3,
                  py::arg("split_node_minimum_edge_num") = 20,
                  py::arg("split_node_minimum_similarity") = 0.35)
-            .def("find_available_choices", &KnowledgeMatcher::findAvailableChoices)
+            .def("find_available_choices", &KnowledgeMatcher::findAvailableChoices,
+                 py::arg("visited_nodes"),
+                 py::arg("previous_nodes"),
+                 py::arg("prune_similar_edges") = false)
             .def("match_source_and_target_nodes", &KnowledgeMatcher::matchSourceAndTargetNodes,
                  py::arg("source_sentence"),
                  py::arg("target_sentence"),

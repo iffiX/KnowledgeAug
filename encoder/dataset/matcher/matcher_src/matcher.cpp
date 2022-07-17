@@ -38,7 +38,7 @@ template <typename InIt1, typename InIt2>
 bool unordered_set_has_intersection(InIt1 b1, InIt1 e1, InIt2 b2, InIt2 e2) {
     // For performance, put smaller set at first
     while (!(b1 == e1)) {
-        if (!(std::find(b2, e2, *b1) == e2)) {
+        if (!(find(b2, e2, *b1) == e2)) {
             return true;
         }
         ++b1;
@@ -56,7 +56,7 @@ bool UnorderedPair<T>::operator==(const UnorderedPair<T> &other) {
 }
 
 template<typename T>
-std::size_t UnorderedPairHash<T>::operator()(const UnorderedPair<T> &pair) const {
+size_t UnorderedPairHash<T>::operator()(const UnorderedPair<T> &pair) const {
     return hash<T>(pair.value1) ^ hash<T>(pair.value2);
 }
 
@@ -189,7 +189,7 @@ void KnowledgeBase::disableEdgesWithWeightBelow(float minWeight) {
     }
 }
 
-void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel) {
+void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel, bool excludeCompositeNodes) {
     unordered_set<string> disabledSet(rel.begin(), rel.end());
     unordered_set<long> disabledIds;
     for (long relationshipId = 0; relationshipId < relationships.size(); relationshipId++) {
@@ -197,12 +197,14 @@ void KnowledgeBase::disableEdgesOfRelationships(const vector<string> &rel) {
             disabledIds.insert(relationshipId);
     }
     for (size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
-        if (disabledIds.find(get<1>(edges[edgeIndex])) != disabledIds.end())
+        bool skip = excludeCompositeNodes and
+                    (isNodeComposite[get<0>(edges[edgeIndex])] or isNodeComposite[get<2>(edges[edgeIndex])]);
+        if (not skip and disabledIds.find(get<1>(edges[edgeIndex])) != disabledIds.end())
             isEdgeDisabled[edgeIndex] = true;
     }
 }
 
-void KnowledgeBase::enableEdgesOfRelationships(const vector<string> &rel) {
+void KnowledgeBase::enableEdgesOfRelationships(const vector<string> &rel, bool excludeCompositeNodes) {
     unordered_set<string> enabledSet(rel.begin(), rel.end());
     unordered_set<long> enabledIds;
     for (long relationshipId = 0; relationshipId < relationships.size(); relationshipId++) {
@@ -210,7 +212,9 @@ void KnowledgeBase::enableEdgesOfRelationships(const vector<string> &rel) {
             enabledIds.insert(relationshipId);
     }
     for (size_t edgeIndex = 0; edgeIndex < edges.size(); edgeIndex++) {
-        if (enabledIds.find(get<1>(edges[edgeIndex])) == enabledIds.end())
+        bool skip = excludeCompositeNodes and
+                    (isNodeComposite[get<0>(edges[edgeIndex])] or isNodeComposite[get<2>(edges[edgeIndex])]);
+        if (not skip and enabledIds.find(get<1>(edges[edgeIndex])) == enabledIds.end())
             isEdgeDisabled[edgeIndex] = true;
     }
 }
@@ -273,17 +277,24 @@ unordered_set<long> KnowledgeBase::getNodeNeighbors(long node) const {
 vector<Edge> KnowledgeBase::getEdges(long source, long target) const {
     vector<Edge> result;
     if (source != -1 && target == -1) {
-        if (edgeFromSource.find(source) != edgeFromSource.end())
+        if (edgeFromSource.find(source) != edgeFromSource.end()) {
             for (size_t edgeIndex: edgeFromSource.at(source))
-                result.push_back(edges[edgeIndex]);
+                if (not isEdgeDisabled[edgeIndex])
+                    result.push_back(edges[edgeIndex]);
+        }
+
     } else if (source == -1 && target != -1) {
-        if (edgeToTarget.find(target) != edgeToTarget.end())
+        if (edgeToTarget.find(target) != edgeToTarget.end()) {
             for (size_t edgeIndex: edgeToTarget.at(target))
+                if (not isEdgeDisabled[edgeIndex])
+                    result.push_back(edges[edgeIndex]);
+        }
+    } else if (edgeFromSource.find(source) != edgeFromSource.end()) {
+        for (size_t edgeIndex : edgeFromSource.at(source)) {
+            if (not isEdgeDisabled[edgeIndex] and get<2>(edges[edgeIndex]) == target)
                 result.push_back(edges[edgeIndex]);
-    } else if (edgeFromSource.find(source) != edgeFromSource.end())
-        for (size_t edgeIndex : edgeFromSource.at(source))
-            if (get<2>(edges[edgeIndex]) == target)
-                result.push_back(edges[edgeIndex]);
+        }
+    }
 
     return move(result);
 }
@@ -292,12 +303,12 @@ vector<Edge> KnowledgeBase::getEdgesBidirection(long node1, long node2) const {
     vector<Edge> result;
     if (edgeFromSource.find(node1) != edgeFromSource.end()) {
         for (size_t edgeIndex : edgeFromSource.at(node1))
-            if (get<2>(edges[edgeIndex]) == node2)
+            if (not isEdgeDisabled[edgeIndex] and get<2>(edges[edgeIndex]) == node2)
                 result.push_back(edges[edgeIndex]);
     }
     if (edgeFromSource.find(node2) != edgeFromSource.end()) {
         for (size_t edgeIndex : edgeFromSource.at(node2))
-            if (get<2>(edges[edgeIndex]) == node1)
+            if (not isEdgeDisabled[edgeIndex] and get<2>(edges[edgeIndex]) == node1)
                 result.push_back(edges[edgeIndex]);
     }
     return move(result);
@@ -424,9 +435,9 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
 
 void KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId) {
     if (sourceNodeId < 0 || sourceNodeId >= nodes.size())
-        throw std::invalid_argument(fmt::format("Invalid source node {}", sourceNodeId));
+        throw invalid_argument(fmt::format("Invalid source node {}", sourceNodeId));
     if (compositeNodeId < 0 || compositeNodeId >= nodes.size() || not isNodeComposite[compositeNodeId])
-        throw std::invalid_argument(fmt::format("Invalid target node {}", compositeNodeId));
+        throw invalid_argument(fmt::format("Invalid target node {}", compositeNodeId));
     size_t edgeIndex = edges.size();
     edges.emplace_back(Edge{sourceNodeId, relationId, compositeNodeId, 1, ""});
     edgeToTarget[compositeNodeId].push_back(edgeIndex);
@@ -632,8 +643,8 @@ size_t KnowledgeBase::VectorHash::operator()(const vector<int> &vec) const {
 }
 
 void KnowledgeBase::loadEmbedding() {
-    std::shared_ptr<HighFive::File> nodeEmbeddingFile;
-    std::shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
+    shared_ptr<HighFive::File> nodeEmbeddingFile;
+    shared_ptr<HighFive::DataSet> nodeEmbeddingDataset;
 
     nodeEmbedding.reset();
     if (not nodeEmbeddingFileName.empty()) {
@@ -716,7 +727,7 @@ KnowledgeMatcher::KnowledgeMatcher(const string &archivePath) {
     cout << "[KM] Matcher initialized" << endl;
 }
 
-void KnowledgeMatcher::setCorpus(const std::vector<std::vector<int>> &corpus) {
+void KnowledgeMatcher::setCorpus(const vector<vector<int>> &corpus) {
     isCorpusSet = true;
     documentCountOfNodeInCorpus.clear();
     corpusSize = corpus.size();
@@ -738,7 +749,7 @@ void KnowledgeMatcher::setCorpus(const std::vector<std::vector<int>> &corpus) {
     bar.finish();
 }
 
-std::string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) {
+string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) {
     auto targetIdVec = kb.findNodes({targetConcept});
     long targetId = targetIdVec[0];
     vector<long> conceptIds = kb.findNodes(concepts, true);
@@ -848,8 +859,8 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #endif
 
     vector<Edge> bestPath;
-
-    for (size_t level = 0; level < searchIds.size() - 1; level++) {
+    for (size_t level = 0; level < searchIds.size() - 1; level++)
+    {
         vector<pair<vector<Edge>, float>> paths;
 
         size_t bestLevelDepth = maxDepthForEachNode;
@@ -945,17 +956,26 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                 // For each path, select edges with highest weight
                 for (auto &rpn : reversedPathNodes) {
                     vector<Edge> path;
+                    bool isPathCompleted = true;
                     // Note the target node comes first
                     for (size_t i = rpn.size() - 1; i >= 1; i--) {
                         auto edges = kb.getEdgesBidirection(rpn[i], rpn[i-1]);
-                        path.push_back(
-                                *max_element(edges.begin(), edges.end(),
-                                             [](const Edge &e1, const Edge &e2)
-                                             { return get<3>(e1) < get<3>(e2); }));
+                        if (not edges.empty()) {
+                            path.push_back(
+                                    *max_element(edges.begin(), edges.end(),
+                                                 [](const Edge &e1, const Edge &e2)
+                                                 { return get<3>(e1) < get<3>(e2); }));
+                        }
+                        else {
+                            isPathCompleted = false;
+                            break;
+                        }
                     }
-                    float weight = accumulate(path.begin(), path.end(), 0,
-                                              [](float sum, const Edge &e) { return sum + get<3>(e); });
-                    paths.push_back(make_pair(path, weight));
+                    if (isPathCompleted) {
+                        float weight = accumulate(path.begin(), path.end(), 0,
+                                                  [](float sum, const Edge &e) { return sum + get<3>(e); });
+                        paths.push_back(make_pair(path, weight));
+                    }
                 }
             }
         }
@@ -973,7 +993,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #ifdef DEBUG_DECISION
             cout << fmt::format("Level {}, Path found", level) << endl;
             for (size_t i = 0; i < paths.size(); i++) {
-                cout << fmt::format("Path {}: ", i);
+                cout << fmt::format("Path {}, weight={}: ", i, paths[i].second);
                 for (auto &edge : paths[i].first)
                     cout << edgeToStringAnnotation(edge) << ", ";
                 cout << endl;
@@ -990,38 +1010,65 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #endif
             break;
         }
-
     }
+
+    // Store start nodes of the first level
+    get<2>(result).emplace_back(vector<long>(searchIds[0].begin(), searchIds[0].end()));
+
+    long startNode = -1;
+    if (not bestPath.empty()) {
+        startNode = searchIds[0].find(get<0>(bestPath[0])) == searchIds[0].end() ?
+                get<2>(bestPath[0]) : get<0>(bestPath[0]);
+    }
+
     for (auto &edge : bestPath) {
         get<0>(result).emplace_back(edgeToAnnotation(edge));
         get<1>(result).emplace_back(edge);
+        startNode = get<0>(edge) == startNode ? get<2>(edge) : get<0>(edge);
+        get<2>(result).emplace_back(vector<long>{startNode});
     }
     return move(result);
 }
 
 KnowledgeMatcher::ChoiceResult
-KnowledgeMatcher::findAvailableChoices(const std::vector<long> &previousNodes) {
+KnowledgeMatcher::findAvailableChoices(const vector<long> &visitedNodes,
+                                       const vector<long> &previousNodes,
+                                       bool pruneSimilarEdges) {
     ChoiceResult result;
+    unordered_set<long> visitedSet(visitedNodes.begin(), visitedNodes.end());
+    unordered_map<long, unordered_set<long>> addedEdges;
+    if (previousNodes.size() == 1 and kb.isNodeComposite[previousNodes[0]])
+        pruneSimilarEdges = false;
     for (long previousNode : previousNodes) {
         auto neighbors = kb.getNodeNeighbors(previousNode);
         for (long neighborNode : neighbors) {
-            auto edges = kb.getEdgesBidirection(previousNode, neighborNode);
-            auto bestEdge = *max_element(edges.begin(), edges.end(), [](const Edge &e1, const Edge &e2){
-                return get<3>(e1) < get<3>(e2);
-            });
-            get<0>(result).push_back(edgeToAnnotation(bestEdge));
-            get<1>(result).push_back(neighborNode);
-            get<2>(result).push_back(bestEdge);
+            if (visitedSet.find(neighborNode) == visitedSet.end()) {
+                auto edges = kb.getEdgesBidirection(previousNode, neighborNode);
+                if (not edges.empty()) {
+                    auto bestEdge = *max_element(edges.begin(), edges.end(), [](const Edge &e1, const Edge &e2) {
+                        return get<3>(e1) < get<3>(e2);
+                    });
+                    if (not pruneSimilarEdges ||
+                        addedEdges.find(get<1>(bestEdge)) == addedEdges.end() ||
+                        addedEdges.at(get<1>(bestEdge)).find(get<2>(bestEdge))
+                        == addedEdges.at(get<1>(bestEdge)).end()) {
+                        get<0>(result).push_back(edgeToAnnotation(bestEdge));
+                        get<1>(result).push_back(neighborNode);
+                        get<2>(result).push_back(bestEdge);
+                        addedEdges[get<1>(bestEdge)].insert(get<2>(bestEdge));
+                    }
+                }
+            }
         }
     }
     return move(result);
 }
 
 KnowledgeMatcher::SourceAndTargetNodes
-KnowledgeMatcher::matchSourceAndTargetNodes(const std::vector<int> &sourceSentence,
-                                            const std::vector<int> &targetSentence,
-                                            const std::vector<int> &sourceMask,
-                                            const std::vector<int> &targetMask,
+KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
+                                            const vector<int> &targetSentence,
+                                            const vector<int> &sourceMask,
+                                            const vector<int> &targetMask,
                                             size_t splitNodeMinimumEdgeNum,
                                             float splitNodeMinimumSimilarity) {
     unordered_map<size_t, vector<int>> sourceMatch, targetMatch;

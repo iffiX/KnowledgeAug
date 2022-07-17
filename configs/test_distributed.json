@@ -1,0 +1,15 @@
+{
+    "configs": [
+        {
+            "train_batch_size": 2,
+            "train_dataset_size": 13,
+            "validate_batch_size": 2,
+            "validate_dataset_size": 11
+        }
+    ],
+    "gpus": [0, 1],
+    "stages": [
+        "test_distributed"
+    ],
+    "working_directory": "/home/muhan/data/workspace/knowledge_aug/test_distributed"
+}

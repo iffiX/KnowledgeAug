@@ -152,28 +152,28 @@ class OpenBookQASearchTrainConfig(BaseModel):
     load_prefetch_per_worker: Optional[int] = 2
 
 
-class OpenBookQAGailTrainConfig(BaseModel):
+class OpenBookQASampleTrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
     save: bool = True
     save_last: bool = False
-    epochs: int = 20
-    pretrain_epochs: int = 5
+    epochs: int = 5
     train_steps: Optional[int] = None
     validate_steps: Optional[int] = None
-    batch_size: int = 2
-    actor_pretrain_batch_size: int = 16
-    rl_batch_size: int = 2
+    batch_size: int = 1
+    accumulate_grad_batches: int = 1
 
-    optimizer_class: str = "AdamW"
-    pretrain_learning_rate: float = 5e-5
-    rl_actor_learning_rate: float = 5e-5
-    rl_critic_learning_rate: float = 5e-5
-    rl_discriminator_learning_rate: float = 5e-5
+    optimizer_class: str = "Adam"
+    learning_rate: float = 5e-5
+    l2_regularization: float = 0
+    scheduler_warmup_proportion: float = 0
+    scheduler_cycles: int = 1
 
     base_type: str = "microsoft/deberta-v3-base"
-    embedder_base_type: str = "sentence-transformers/all-MiniLM-L6-v2"
-    max_seq_length: int = 128
+    pad_by_longest: bool = True
+    max_seq_length: Union[int, None] = None
+    inference_batch_size: int = 256
+
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
 
@@ -182,9 +182,41 @@ class OpenBookQAGailTrainConfig(BaseModel):
     matcher_config: Optional[dict] = None
     match_closest_when_no_equal: bool = True
 
-    replay_size: int = 10000
     max_steps: int = 5
+    beam_size: int = 10
+    return_beam_num: int = 5
+    min_logits: Union[float, None] = None
+    max_inference_num: int = 20000
     state_delimeter: str = ", "
+    end_of_reasoning: str = "END_OF_REASONING"
+    negative_samples: int = 31
+    negative_shuffle_seed: int = 42
+
+
+class OpenBookQAAugmentTrainConfig(BaseModel):
+    load: bool = False
+    seed: int = 42
+    save: bool = True
+    save_last: bool = False
+    epochs: int = 20
+    train_steps: Optional[int] = None
+    validate_steps: Optional[int] = None
+    batch_size: int = 16
+    accumulate_grad_batches: int = 1
+
+    optimizer_class: str = "AdamW"
+    learning_rate: float = 5e-6
+    l2_regularization: float = 0
+    scheduler_warmup_proportion: float = 0
+    scheduler_cycles: int = 1
+
+    base_type: str = "microsoft/deberta-v3-large"
+    model_configs: Optional[dict] = None
+    max_seq_length: int = 256
+    generate_length: int = 20
+    device_map: Optional[Dict[int, List[int]]] = None
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
 
 
 class ARCTrainConfig(BaseModel):
@@ -272,10 +304,24 @@ class EnsembleTrainConfig(BaseModel):
     matcher_configs_list: List[List[dict]]
 
 
+class TestDistributedTrainConfig(BaseModel):
+    train_batch_size: int = 2
+    validate_batch_size: int = 2
+    test_batch_size: int = 2
+    train_dataset_size: int = 10
+    validate_dataset_size: int = 10
+    test_dataset_size: int = 10
+
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+
 class Config(BaseModel):
     # Cuda ids of GPUs
     gpus: Optional[Union[int, List[int]]] = [0]
     precision: Optional[Union[int, str]] = 32
+    # Only available for validate/test
+    override_saved_config: Optional[Dict[str, Dict[str, Any]]] = None
     deepspeed: bool = False
     deepspeed_configs: Optional[dict] = None
     # Maximum validation epochs allowed before stopping
@@ -308,10 +354,12 @@ def stage_name_to_config(name: str, config_dict: dict = None):
         "commonsense_qa_search": CommonsenseQASearchTrainConfig,
         "openbook_qa": OpenBookQATrainConfig,
         "openbook_qa_search": OpenBookQASearchTrainConfig,
-        "openbook_qa_gail": OpenBookQAGailTrainConfig,
+        "openbook_qa_sample": OpenBookQASampleTrainConfig,
+        "openbook_qa_augment": OpenBookQAAugmentTrainConfig,
         "arc": ARCTrainConfig,
         "arc_search": ARCSearchTrainConfig,
         "ensemble": EnsembleTrainConfig,
+        "test_distributed": TestDistributedTrainConfig,
     }
     if name in stage_name_to_config_map:
         config_dict = config_dict or {}
@@ -326,6 +374,7 @@ def load_config(path: str) -> Config:
         config = Config(
             gpus=config_dict.get("gpus", 0),
             precision=config_dict.get("precision", 32),
+            override_saved_config=config_dict.get("override_saved_config", None),
             deepspeed=config_dict.get("deepspeed", False),
             deepspeed_configs=config_dict.get("deepspeed_configs", None),
             early_stopping_patience=config_dict.get("early_stopping_patience", 100),

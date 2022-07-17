@@ -7,10 +7,12 @@ from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_search_trainer import OpenBookQASearchTrainer
-from .openbook_qa_gail_trainer import OpenBookQAGailTrainer
+from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
+from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
 from .arc_trainer import ARCTrainer
 from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
+from .test_distributed_trainer import TestDistributedTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -21,7 +23,9 @@ stage_name_to_trainer_map = {
     "commonsense_qa_search": CommonsenseQASearchTrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_search": OpenBookQASearchTrainer,
-    "openbook_qa_gail": OpenBookQAGailTrainer,
+    "openbook_qa_sample": OpenBookQASampleTrainer,
+    "openbook_qa_augment": OpenBookQAAugmentTrainer,
+    "test_distributed": TestDistributedTrainer,
     "arc": ARCTrainer,
     "arc_search": ARCSearchTrainer,
     "ensemble": EnsembleTrainer,
@@ -87,6 +91,16 @@ def stage_name_to_checkpoint(stage: str, checkpoint_path: str):
         )
     else:
         raise ValueError(f"Unknown stage {stage}.")
+
+
+def override_saved_config(trainer, override_attributes):
+    print(f"Overriding config for trainer of type {type(trainer)}")
+    for k, v in override_attributes.items():
+        if hasattr(trainer.config, k):
+            print(f"Set {k}={v}, original={getattr(trainer.config, k)}")
+            setattr(trainer.config, k, v)
+        else:
+            print(f"Attribute {k} not found, skipping")
 
 
 def _train(
@@ -159,7 +173,7 @@ def _train(
         reload_dataloaders_every_epoch=True
         if isinstance(
             stage_trainer,
-            (ARCSearchTrainer, OpenBookQASearchTrainer, OpenBookQAGailTrainer),
+            (ARCSearchTrainer, OpenBookQASearchTrainer, OpenBookQASampleTrainer),
         )
         else False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
@@ -228,12 +242,24 @@ def run(config: Config, stage_index: int, mode: str = "train"):
         # and must perform manual load
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
 
+        is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
+            isinstance(config.gpus, int) and config.gpus > 1
+        )
+
+        stage_trainer.is_distributed = is_distributed
+        if (
+            config.override_saved_config is not None
+            and str(stage_index) in config.override_saved_config
+        ):
+            override_saved_config(
+                stage_trainer, config.override_saved_config[str(stage_index)]
+            )
+
         trainer = pl.Trainer(
             accelerator="gpu"
             if not (isinstance(config.gpus, int) and config.gpus == 0)
             else None,
             gpus=config.gpus,
-            strategy="ddp" if is_distributed else None,
             plugins=[DDPPlugin(find_unused_parameters=True)]
             if is_distributed
             else None,

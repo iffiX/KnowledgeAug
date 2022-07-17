@@ -149,16 +149,16 @@ int main() {
     KnowledgeMatcher matcher("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
 
     // matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask, 1000, 3, 697474, 10, 1, true, 0);
-    matcher.kb.addCompositeNode("the sun is the source of energy for physical cycles on Earth",
+    matcher.kb.addCompositeNode("hawks eat lizards",
                                 "RelatedTo",
-                                std::vector<int>{1996, 3103, 2003, 1996, 3120, 1997, 2943, 2005, 3558, 12709, 2006, 3011},
-                                std::vector<int>{0, 1, 0, 0, 1, 0, 1, 0, 1, 1, 0, 1});
+                                std::vector<int>{12505, 4521, 23898},
+                                std::vector<int>{1, 1, 1});
     matcher.findShortestPath(
-        std::vector<int>{1996,3103,2003,3625,2005,1029},
-        std::vector<int>{4264,11867,22494,3436,1010,13426,2075,1998,19863,3436},
-        std::vector<std::string>{"the sun is the source of energy for physical cycles on Earth"},
-        std::vector<int>{0,1,0,1,0,0},
-        std::vector<int>{1,1,1,1,0,1,1,0,1,1},
+        std::vector<int>{1999,1996,5532,1010,1037,9881,2089,5959,2019,8138},
+        std::vector<int>{16360,15286},
+        std::vector<std::string>{"hawks eat lizards"},
+        std::vector<int>{0,0,1,0,0,1,0,1,0,1},
+        std::vector<int>{1,1},
         3
     );
 

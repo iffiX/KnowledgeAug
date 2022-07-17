@@ -1,0 +1,43 @@
+{
+    "configs": [
+        {
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 1,
+            "epochs": 20,
+            "negative_samples": 31,
+            "learning_rate": 5e-6,
+            "inference_batch_size": 128,
+            "load": false,
+            "max_seq_length": 256,
+            "pad_by_longest": true,
+            "min_logits": null,
+            "optimizer_class": "AdamW",
+            "use_matcher": true,
+            "matcher_mode": "embedding",
+            "matcher_config": {
+                "question_match_max_times": 1000,
+                "question_match_max_depth": 1,
+                "question_match_edge_top_k": 10,
+                "question_match_source_context_range": 1,
+                "question_select_max_edges": 2,
+                "question_select_discard_edges_if_rank_below": 0.4,
+                "choices_match_max_times": 1000,
+                "choices_match_max_depth": 1,
+                "choices_match_edge_top_k": 10,
+                "choices_match_source_context_range": 1,
+                "choices_select_max_edges": 2,
+                "choices_select_discard_edges_if_rank_below": 0.4
+            },
+            "state_delimeter": ", ",
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "override_saved_config": {"0": {"min_logits": -3, "return_beam_num": 10}},
+    "early_stopping_patience": 15,
+    "gpus": [0, 1],
+    "stages": [
+        "openbook_qa_sample"
+    ],
+    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_ob_qa_sample2"
+}

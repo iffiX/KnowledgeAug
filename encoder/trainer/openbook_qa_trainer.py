@@ -17,7 +17,7 @@ from .utils import (
     set_worker_sharing_strategy,
     make_scheduler,
 )
-from encoder.model.multiple_choice.model import Model
+from encoder.models.multiple_choice.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.openbook_qa import OpenBookQADataset
 from encoder.utils.config import OpenBookQATrainConfig, fix_missing

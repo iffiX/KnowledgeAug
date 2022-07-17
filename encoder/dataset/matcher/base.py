@@ -62,10 +62,11 @@ class BaseMatcher:
         max_depth_for_each_node: int = 3,
         split_node_minimum_edge_num: int = 20,
         split_node_minimum_similarity: float = 0.35,
-    ) -> Tuple[List[str], List[Edge]]:
+    ) -> Tuple[List[str], List[Edge], List[List[int]]]:
         """
         Returns:
-            A list of edge annotations, a list of corresponding edges.
+            A list of edge annotations, a list of corresponding edges,
+            a list of starting nodes (not necessarily the source node of the edge).
         """
         source_tokens, _source_mask = self.tokenize_and_mask(
             source_sentence, source_mask, mask_stopwords=True
@@ -73,7 +74,11 @@ class BaseMatcher:
         target_tokens, _target_mask = self.tokenize_and_mask(
             target_sentence, target_mask, mask_stopwords=True
         )
-        edges_annotation_tokens, edges = self.matcher.find_shortest_path(
+        (
+            edges_annotation_tokens,
+            edges,
+            starting_nodes,
+        ) = self.matcher.find_shortest_path(
             source_sentence=source_tokens,
             target_sentence=target_tokens,
             intermediate_nodes=intermediate_nodes,
@@ -86,22 +91,29 @@ class BaseMatcher:
         result = (
             [self.tokenizer.decode(tokens) for tokens in edges_annotation_tokens],
             edges,
+            starting_nodes,
         )
         return result
 
     def find_available_choices(
-        self, previous_nodes: List[int]
+        self,
+        visited_nodes: List[int],
+        previous_nodes: List[int],
+        prune_similar_edges: bool = False,
     ) -> Tuple[List[str], List[int], List[Edge]]:
         """
         Returns:
             A list of edge annotations, a list of next node ids the edge is
-            leading to, and a list of corresponding edges
+            leading to (not necessarily the target node of the edge),
+            and a list of corresponding edges
         """
         (
             edges_annotation_tokens,
             next_nodes,
             edges,
-        ) = self.matcher.find_available_choices(previous_nodes)
+        ) = self.matcher.find_available_choices(
+            visited_nodes, previous_nodes, prune_similar_edges
+        )
         return (
             [self.tokenizer.decode(tokens) for tokens in edges_annotation_tokens],
             next_nodes,

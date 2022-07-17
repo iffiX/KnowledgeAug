@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import T5ForConditionalGeneration, AutoTokenizer, BatchEncoding
 from pytorch_lightning.utilities import rank_zero_only
-from encoder.model.multiple_choice.model import Model
+from encoder.models.multiple_choice.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.arc import ARCDataset
 from encoder.utils.config import ARCTrainConfig, fix_missing

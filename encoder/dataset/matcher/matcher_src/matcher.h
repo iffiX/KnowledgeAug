@@ -1,8 +1,8 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-//#define DEBUG_DECISION
-//#define DEBUG
+#define DEBUG_DECISION
+#define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
@@ -136,9 +136,9 @@ public:
 
     void disableEdgesWithWeightBelow(float minWeight);
 
-    void disableEdgesOfRelationships(const std::vector<std::string> &relationships);
+    void disableEdgesOfRelationships(const std::vector<std::string> &relationships, bool excludeCompositeNodes = true);
 
-    void enableEdgesOfRelationships(const std::vector<std::string> &relationships);
+    void enableEdgesOfRelationships(const std::vector<std::string> &relationships, bool excludeCompositeNodes = true);
 
     void disableEdgesOfNodes(const std::vector<std::string> &nodes);
 
@@ -241,7 +241,7 @@ public:
     };
 
     typedef std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>> SelectResult;
-    typedef std::tuple<std::vector<std::vector<int>>, std::vector<Edge>> PathResult;
+    typedef std::tuple<std::vector<std::vector<int>>, std::vector<Edge>, std::vector<std::vector<long>>> PathResult;
     typedef std::tuple<std::vector<long>, std::vector<long>> SourceAndTargetNodes;
     typedef std::tuple<std::vector<std::vector<int>>, std::vector<long>, std::vector<Edge>> ChoiceResult;
 
@@ -260,6 +260,8 @@ public:
 
     std::string findClosestConcept(std::string targetConcept, const std::vector<std::string> &concepts);
 
+    
+
     PathResult findShortestPath(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence,
                                 const std::vector<std::string> &intermediateNodes,
                                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
@@ -267,7 +269,9 @@ public:
                                 size_t splitNodeMinimumEdgeNum = 20,
                                 float splitNodeMinimumSimilarity = 0.35);
 
-    ChoiceResult findAvailableChoices(const std::vector<long> &previousNodes);
+    ChoiceResult findAvailableChoices(const std::vector<long> &visitedNodes, const std::vector<long> &previousNodes, bool pruneSimilarEdges = false);
+
+
 
     SourceAndTargetNodes matchSourceAndTargetNodes(const std::vector<int> &sourceSentence,
                                                    const std::vector<int> &targetSentence,
