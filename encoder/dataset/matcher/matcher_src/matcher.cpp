@@ -749,7 +749,7 @@ void KnowledgeMatcher::setCorpus(const vector<vector<int>> &corpus) {
     bar.finish();
 }
 
-string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) {
+string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) const {
     auto targetIdVec = kb.findNodes({targetConcept});
     long targetId = targetIdVec[0];
     vector<long> conceptIds = kb.findNodes(concepts, true);
@@ -775,7 +775,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                                    const vector<int> &targetMask,
                                    int maxDepthForEachNode,
                                    size_t splitNodeMinimumEdgeNum,
-                                   float splitNodeMinimumSimilarity) {
+                                   float splitNodeMinimumSimilarity) const {
 #ifdef DEBUG
     cout << "================================================================================" << endl;
     cout << "Method: findShortestPath" << endl;
@@ -790,6 +790,8 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     cout << fmt::format("targetMask: [{}]",
                         fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
     cout << "maxDepthForEachNode: " << maxDepthForEachNode << endl;
+    cout << "splitNodeMinimumEdgeNum: " << splitNodeMinimumEdgeNum << endl;
+    cout << "splitNodeMinimumSimilarity: " << splitNodeMinimumSimilarity << endl;
     cout << "================================================================================" << endl;
 #endif
     // start token position of the node, tokens made up of the node
@@ -849,16 +851,16 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     searchIds.emplace_back(unordered_set<long>(targetNodes.begin(), targetNodes.end()));
 
 #ifdef DEBUG_DECISION
-    cout << "SearchIds:" << endl;
+    cout << endl << "SearchIds:" << endl;
     for (size_t i = 0; i < searchIds.size(); i++) {
         cout << fmt::format("Level {}: ", i);
         for (long node : searchIds[i])
-            cout << fmt::format("({}) {}, ", node, kb.getNodes({node})[0]);
+            cout << fmt::format("({}) {}, ", node, kb.nodes[node]);
         cout << endl;
     }
 #endif
 
-    vector<Edge> bestPath;
+    vector<vector<Edge>> bestPath;
     for (size_t level = 0; level < searchIds.size() - 1; level++)
     {
         vector<pair<vector<Edge>, float>> paths;
@@ -867,50 +869,73 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 
         // rank start nodes by their similarity to the next level nodes
         vector<long> startNodes;
-        if (level == 0) {
-            vector<pair<long, float>> rank;
-            long nextNode = *searchIds[1].begin();
-            for (long startNode : searchIds[0]) {
-                if (not kb.isNodeComposite[nextNode]) {
-                    rank.push_back(make_pair(startNode, kb.cosineSimilarity(startNode, nextNode)));
-                }
+        vector<pair<long, float>> rank;
+        for (long node : searchIds[level]) {
+            if (kb.isNodeComposite[node]) {
+                for (auto &component : kb.compositeNodes.at(node))
+                    startNodes.push_back(component.first);
+            }
+            else {
+                startNodes.push_back(node);
+            }
+        }
+        for (long startNode : startNodes) {
+            float bestSimilarity = -1;
+            for(long nextNode : searchIds[level + 1]) {
+                if (not kb.isNodeComposite[nextNode])
+                    bestSimilarity= kb.cosineSimilarity(startNode, nextNode);
                 else {
-                    float bestSimilarity = -1;
-                    for (auto component : kb.compositeNodes[nextNode]) {
+                    for (auto component : kb.compositeNodes.at(nextNode)) {
                         float similarity = kb.cosineSimilarity(startNode, component.first);
-                        if (similarity > bestSimilarity)
-                            bestSimilarity = similarity;
+                        bestSimilarity = similarity > bestSimilarity ? similarity : bestSimilarity;
                     }
-                    rank.push_back(make_pair(startNode, bestSimilarity));
                 }
             }
-            sort(rank.begin(), rank.end(), [](const pair<long, float> &a, const pair<long, float> &b){
-                return a.second > b.second;
-            });
-            for (auto &node : rank)
-                startNodes.push_back(node.first);
+            rank.push_back(make_pair(startNode, bestSimilarity));
         }
-        else {
-            startNodes.insert(startNodes.end(), searchIds[level].begin(), searchIds[level].end());
-        }
+        sort(rank.begin(), rank.end(), [](const pair<long, float> &a, const pair<long, float> &b){
+            return a.second > b.second;
+        });
+        startNodes.clear();
+        for (auto &node : rank)
+            startNodes.push_back(node.first);
 
+
+        // Note: currently, if several levels share the same start nodes, they are not deduplicated
+#ifdef DEBUG_DECISION
+        cout << endl << fmt::format("Level {} Start Nodes:", level) << endl;
+        for (long node : startNodes)
+            cout << fmt::format("({}) {}, ", node, kb.nodes[node]);
+        cout << endl;
+#endif
         for (long startNode : startNodes) {
-            vector<bool> visitedNodes(kb.nodes.size(), false);
+            vector<bool> visited(kb.nodes.size(), false);
+            // Prevent cycles
+            for (auto &subPath : bestPath) {
+                for (auto &edge : subPath) {
+                    visited[get<0>(edge)] = true;
+                    visited[get<2>(edge)] = true;
+                }
+            }
             unordered_set<long> lastStepVisitedNodes;
             unordered_map<long, vector<long>> previousNodes;
-            visitedNodes[startNode] = true;
+            visited[startNode] = true;
             lastStepVisitedNodes.insert(startNode);
             previousNodes[startNode] = {};
 
             bool found = false;
             size_t step;
+
+#ifdef DEBUG_DECISION
+            cout << fmt::format("Current start node: ({}) {}", startNode, kb.nodes[startNode]) << endl;
+#endif
             for (step = 0; step < bestLevelDepth; step++) {
                 unordered_set<long> newVisitedNodes;
                 for (long lastNode : lastStepVisitedNodes) {
                     auto neighbors = kb.getNodeNeighbors(lastNode);
                     for (long neighbor : neighbors) {
                         // If the neighbor node is only visited in the current step
-                        if (not visitedNodes[neighbor]) {
+                        if (not visited[neighbor]) {
                             previousNodes[neighbor].push_back(lastNode);
                             newVisitedNodes.insert(neighbor);
                         }
@@ -920,7 +945,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                 cout << fmt::format("Step {} visited nodes {}", step, newVisitedNodes.size()) << endl;
 #endif
                 for (long newVisitedNode : newVisitedNodes)
-                    visitedNodes[newVisitedNode] = true;
+                    visited[newVisitedNode] = true;
                 found = unordered_set_has_intersection(searchIds[level + 1].begin(),
                                                        searchIds[level + 1].end(),
                                                        newVisitedNodes.begin(),
@@ -930,9 +955,8 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                     break;
             }
             if (found) {
-                // Update max allowed depth
-                bestLevelDepth = step + 1;
                 // construct paths in the reverse order
+                bool isAnyPathAvailable = false;
                 stack<pair<long, vector<long>>> unvisited;
                 vector<vector<long>> reversedPathNodes;
                 for(long node : searchIds[level + 1]) {
@@ -950,7 +974,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                             unvisited.push(make_pair(previousNode, newPath));
                         }
                     }
-                    else
+                    else if (currentPathNodes.size() > 1)
                         reversedPathNodes.emplace_back(currentPathNodes);
                 }
                 // For each path, select edges with highest weight
@@ -972,10 +996,28 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                         }
                     }
                     if (isPathCompleted) {
+                        isAnyPathAvailable = true;
                         float weight = accumulate(path.begin(), path.end(), 0,
                                                   [](float sum, const Edge &e) { return sum + get<3>(e); });
                         paths.push_back(make_pair(path, weight));
                     }
+                    else {
+#ifdef DEBUG_DECISION
+                        cout << fmt::format("Reject potential path: ");
+                        // size_t may cause underflow
+                        for (long i = rpn.size() - 1; i >= 0; i--)
+                            cout << fmt::format("({}) {}, ", rpn[i], kb.nodes[rpn[i]]);
+                        cout << endl;
+#endif
+                    }
+                }
+
+                if (isAnyPathAvailable and bestLevelDepth > step + 1) {
+                    // Update max allowed depth
+                    bestLevelDepth = step + 1;
+#ifdef DEBUG_DECISION
+                    cout << fmt::format("Update bestLevelDepth to {}", bestLevelDepth) << endl;
+#endif
                 }
             }
         }
@@ -988,7 +1030,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                 return p1.first.size() > p2.first.size() ||
                 (p1.first.size() == p2.first.size() && p1.second < p2.second);
             })->first;
-            bestPath.insert(bestPath.end(), bestSubPath.begin(), bestSubPath.end());
+            bestPath.emplace_back(bestSubPath);
 
 #ifdef DEBUG_DECISION
             cout << fmt::format("Level {}, Path found", level) << endl;
@@ -1015,52 +1057,199 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     // Store start nodes of the first level
     get<2>(result).emplace_back(vector<long>(searchIds[0].begin(), searchIds[0].end()));
 
-    long startNode = -1;
-    if (not bestPath.empty()) {
-        startNode = searchIds[0].find(get<0>(bestPath[0])) == searchIds[0].end() ?
-                get<2>(bestPath[0]) : get<0>(bestPath[0]);
-    }
+    for (size_t i = 0; i < bestPath.size(); i++) {
+        auto &bestSubPath = bestPath[i];
 
-    for (auto &edge : bestPath) {
-        get<0>(result).emplace_back(edgeToAnnotation(edge));
-        get<1>(result).emplace_back(edge);
-        startNode = get<0>(edge) == startNode ? get<2>(edge) : get<0>(edge);
-        get<2>(result).emplace_back(vector<long>{startNode});
+        // Store annotations of each edge
+        get<0>(result).emplace_back(vector<vector<int>>{});
+        auto &edgeAnnotations = get<0>(result).back();
+        for(auto &edge : bestSubPath)
+            edgeAnnotations.push_back(edgeToAnnotation(edge));
+
+        // Store path
+        get<1>(result).emplace_back(bestSubPath);
+
+        // Store start nodes (of next level)
+        if (i < intermediateNodes.size()) {
+            long startNode = *searchIds[i + 1].begin();
+            if (kb.isNodeComposite[startNode]) {
+                vector<long> components;
+                for (auto &component : kb.compositeNodes.at(startNode))
+                    components.push_back(component.first);
+                get<2>(result).emplace_back(components);
+            }
+            else
+                get<2>(result).emplace_back(vector<long>{startNode});
+        }
+        else {
+            // This sub path leads to the target nodes
+            auto &lastEdge = bestSubPath.back();
+            if (searchIds.back().find(get<0>(lastEdge)) != searchIds.back().end())
+                get<2>(result).emplace_back(vector<long>{get<0>(lastEdge)});
+            else
+                get<2>(result).emplace_back(vector<long>{get<2>(lastEdge)});
+        }
     }
     return move(result);
 }
 
 KnowledgeMatcher::ChoiceResult
-KnowledgeMatcher::findAvailableChoices(const vector<long> &visitedNodes,
-                                       const vector<long> &previousNodes,
-                                       bool pruneSimilarEdges) {
+KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
+                                       const std::vector<long> &startNodes,
+                                       const std::vector<long> &targetNodes,
+                                       int maxDepth,
+                                       bool onlyTarget) const {
+#ifdef DEBUG
+    cout << "================================================================================" << endl;
+    cout << "Method: findAvailableChoices" << endl;
+    cout << fmt::format("visitedNodes: [{}]",
+                        fmt::join(visitedNodes.begin(), visitedNodes.end(), ",")) << endl;
+    cout << fmt::format("startNodes: [{}]",
+                        fmt::join(startNodes.begin(), startNodes.end(), ",")) << endl;
+    cout << fmt::format("targetNodes: [{}]",
+                        fmt::join(targetNodes.begin(), targetNodes.end(), ",")) << endl;
+    cout << "maxDepth: " << maxDepth << endl;
+    cout << "================================================================================" << endl;
+#endif
+
     ChoiceResult result;
-    unordered_set<long> visitedSet(visitedNodes.begin(), visitedNodes.end());
-    unordered_map<long, unordered_set<long>> addedEdges;
-    if (previousNodes.size() == 1 and kb.isNodeComposite[previousNodes[0]])
-        pruneSimilarEdges = false;
-    for (long previousNode : previousNodes) {
-        auto neighbors = kb.getNodeNeighbors(previousNode);
-        for (long neighborNode : neighbors) {
-            if (visitedSet.find(neighborNode) == visitedSet.end()) {
-                auto edges = kb.getEdgesBidirection(previousNode, neighborNode);
-                if (not edges.empty()) {
-                    auto bestEdge = *max_element(edges.begin(), edges.end(), [](const Edge &e1, const Edge &e2) {
-                        return get<3>(e1) < get<3>(e2);
-                    });
-                    if (not pruneSimilarEdges ||
-                        addedEdges.find(get<1>(bestEdge)) == addedEdges.end() ||
-                        addedEdges.at(get<1>(bestEdge)).find(get<2>(bestEdge))
-                        == addedEdges.at(get<1>(bestEdge)).end()) {
-                        get<0>(result).push_back(edgeToAnnotation(bestEdge));
-                        get<1>(result).push_back(neighborNode);
-                        get<2>(result).push_back(bestEdge);
-                        addedEdges[get<1>(bestEdge)].insert(get<2>(bestEdge));
+    unordered_set<long> targetNodesSet(targetNodes.begin(), targetNodes.end());
+
+    size_t bestLevelDepth = maxDepth;
+
+    for (long startNode : startNodes) {
+        unordered_set<long> lastStepVisitedNodes;
+        unordered_map<long, vector<long>> previousNodes;
+        vector<bool> visited(kb.nodes.size(), false);
+
+        for (long visitedNode : visitedNodes)
+            visited[visitedNode] = true;
+        visited[startNode] = true;
+        lastStepVisitedNodes.insert(startNode);
+        previousNodes[startNode] = {};
+
+        size_t step;
+        for (step = 0; step < bestLevelDepth; step++) {
+            unordered_set<long> newVisitedNodes;
+            for (long lastNode : lastStepVisitedNodes) {
+                auto neighbors = kb.getNodeNeighbors(lastNode);
+                for (long neighbor : neighbors) {
+                    // If the neighbor node is only visited in the current step
+                    if (not visited[neighbor]) {
+                        previousNodes[neighbor].push_back(lastNode);
+                        newVisitedNodes.insert(neighbor);
                     }
                 }
             }
+#ifdef DEBUG_DECISION
+            cout << fmt::format("Step {} visited nodes {}", step, newVisitedNodes.size()) << endl;
+#endif
+            for (long newVisitedNode : newVisitedNodes)
+                visited[newVisitedNode] = true;
+#ifdef DEBUG_DECISION
+            bool found = (not targetNodes.empty() and
+                          unordered_set_has_intersection(targetNodesSet.begin(),
+                                                         targetNodesSet.end(),
+                                                         newVisitedNodes.begin(),
+                                                         newVisitedNodes.end()));
+            if (found)
+                cout << fmt::format("Step {} found target nodes", step) << endl;
+#endif
+            lastStepVisitedNodes.swap(newVisitedNodes);
+        }
+
+        // construct paths in the reverse order
+        stack<pair<long, vector<long>>> unvisited;
+        vector<vector<long>> reversedPathNodes;
+
+        // Add visited target nodes as reversed starts
+        for(long node : targetNodes) {
+            if (previousNodes.find(node) != previousNodes.end())
+                unvisited.push(make_pair(node, vector<long>{node}));
+        }
+        // Find all visited composite nodes and add them as reversed starts
+        // Note that visited nodes may not be visited in the current traversal, exclude them
+        if (not onlyTarget) {
+            for (long node = 0; node < kb.nodes.size(); node++) {
+                if (visited[node] and kb.isNodeComposite[node] and previousNodes.find(node) != previousNodes.end() and
+                    targetNodesSet.find(node) == targetNodesSet.end())
+                    unvisited.push(make_pair(node, vector<long>{node}));
+            }
+        }
+
+
+        while (not unvisited.empty()) {
+            long currentNode = unvisited.top().first;
+            auto currentPathNodes = unvisited.top().second;
+            unvisited.pop();
+            if (not previousNodes.at(currentNode).empty()) {
+                for (long previousNode : previousNodes.at(currentNode)) {
+                    auto newPath = currentPathNodes;
+                    newPath.push_back(previousNode);
+                    unvisited.push(make_pair(previousNode, newPath));
+                }
+            }
+            else if (currentPathNodes.size() > 1)
+                reversedPathNodes.emplace_back(currentPathNodes);
+        }
+
+        // For each path, select edges with highest weight
+        for (auto &rpn : reversedPathNodes) {
+            vector<Edge> path;
+            bool isPathCompleted = true;
+            // Note the target node comes first
+            for (size_t i = rpn.size() - 1; i >= 1; i--) {
+                auto edges = kb.getEdgesBidirection(rpn[i], rpn[i-1]);
+                if (not edges.empty()) {
+                    path.push_back(
+                            *max_element(edges.begin(), edges.end(),
+                                         [](const Edge &e1, const Edge &e2)
+                                         { return get<3>(e1) < get<3>(e2); }));
+                }
+                else {
+                    isPathCompleted = false;
+                    break;
+                }
+            }
+            if (isPathCompleted) {
+                // Store annotations of each edge
+                get<0>(result).emplace_back(vector<vector<int>>{});
+                auto &edgeAnnotations = get<0>(result).back();
+                for(auto &edge : path)
+                    edgeAnnotations.push_back(edgeToAnnotation(edge));
+
+                // Store end nodes, for composite end nodes, store components
+                vector<long> endNodes;
+                if (kb.isNodeComposite[rpn[0]]) {
+                    for (auto &component : kb.compositeNodes.at(rpn[0]))
+                        endNodes.push_back(component.first);
+                }
+                else
+                    endNodes.push_back(rpn[0]);
+                get<1>(result).emplace_back(endNodes);
+
+                // Store path
+                get<2>(result).emplace_back(path);
+            }
         }
     }
+#ifdef DEBUG_DECISION
+    cout << fmt::format("Start nodes: [");
+    for (long node : startNodes)
+        cout << kb.nodes[node] << ", ";
+    cout << "]" << endl;
+    cout << fmt::format("Target nodes: [");
+    for (long node : targetNodes)
+        cout << kb.nodes[node] << ", ";
+    cout << "]" << endl;
+    cout << fmt::format("Paths:") << endl;
+    for (size_t i = 0; i < get<2>(result).size(); i++) {
+        cout << fmt::format("Path {}: ", i);
+        for (auto &edge : get<2>(result)[i])
+            cout << edgeToStringAnnotation(edge) << ", ";
+        cout << endl;
+    }
+#endif
     return move(result);
 }
 
@@ -1070,7 +1259,22 @@ KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
                                             const vector<int> &sourceMask,
                                             const vector<int> &targetMask,
                                             size_t splitNodeMinimumEdgeNum,
-                                            float splitNodeMinimumSimilarity) {
+                                            float splitNodeMinimumSimilarity) const {
+#ifdef DEBUG
+    cout << "================================================================================" << endl;
+    cout << "Method: matchSourceAndTargetNodes" << endl;
+    cout << fmt::format("sourceSentence: [{}]",
+                        fmt::join(sourceSentence.begin(), sourceSentence.end(), ",")) << endl;
+    cout << fmt::format("targetSentence: [{}]",
+                        fmt::join(targetSentence.begin(), targetSentence.end(), ",")) << endl;
+    cout << fmt::format("sourceMask: [{}]",
+                        fmt::join(sourceMask.begin(), sourceMask.end(), ",")) << endl;
+    cout << fmt::format("targetMask: [{}]",
+                        fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
+    cout << "splitNodeMinimumEdgeNum: " << splitNodeMinimumEdgeNum << endl;
+    cout << "splitNodeMinimumSimilarity: " << splitNodeMinimumSimilarity << endl;
+    cout << "================================================================================" << endl;
+#endif
     unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
     SourceAndTargetNodes result;
     matchForSourceAndTarget(sourceSentence,
@@ -1105,7 +1309,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 
 #ifdef DEBUG
     cout << "================================================================================" << endl;
-    cout << "Method: match by node embedding" << endl;
+    cout << "Method: matchByNodeEmbedding" << endl;
     cout << fmt::format("sourceSentence: [{}]",
                         fmt::join(sourceSentence.begin(), sourceSentence.end(), ",")) << endl;
     cout << fmt::format("targetSentence: [{}]",
@@ -1122,7 +1326,10 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     cout << "edgeTopK: " << edgeTopK << endl;
     cout << "sourceContextRange: " << sourceContextRange << endl;
     cout << "trim: " << trim << endl;
+    cout << "splitNodeMinimumEdgeNum: " << splitNodeMinimumEdgeNum << endl;
+    cout << "splitNodeMinimumSimilarity: " << splitNodeMinimumSimilarity << endl;
     cout << "stopSearchingEdgeIfSimilarityBelow: " << stopSearchingEdgeIfSimilarityBelow << endl;
+    cout << "sourceContextWeight: " << sourceContextWeight << endl;
     cout << "================================================================================" << endl;
 #endif
     // start token position of the node, tokens made up of the node

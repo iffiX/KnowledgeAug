@@ -62,11 +62,14 @@ class BaseMatcher:
         max_depth_for_each_node: int = 3,
         split_node_minimum_edge_num: int = 20,
         split_node_minimum_similarity: float = 0.35,
-    ) -> Tuple[List[str], List[Edge], List[List[int]]]:
+    ) -> Tuple[List[List[str]], List[List[Edge]], List[List[int]]]:
         """
         Returns:
-            A list of edge annotations, a list of corresponding edges,
-            a list of starting nodes (not necessarily the source node of the edge).
+            A list containing several sub list of edge annotations,
+            each sub list corresponding to a sub path.
+            A list of sub list of corresponding edges.
+            a list of starting nodes of each sub path, note it has one more level
+            than other two lists which contains end nodes of last path.
         """
         source_tokens, _source_mask = self.tokenize_and_mask(
             source_sentence, source_mask, mask_stopwords=True
@@ -75,8 +78,8 @@ class BaseMatcher:
             target_sentence, target_mask, mask_stopwords=True
         )
         (
-            edges_annotation_tokens,
-            edges,
+            list_of_sub_path_annotation_tokens,
+            list_of_sub_path_edges,
             starting_nodes,
         ) = self.matcher.find_shortest_path(
             source_sentence=source_tokens,
@@ -89,8 +92,11 @@ class BaseMatcher:
             split_node_minimum_similarity=split_node_minimum_similarity,
         )
         result = (
-            [self.tokenizer.decode(tokens) for tokens in edges_annotation_tokens],
-            edges,
+            [
+                [self.tokenizer.decode(tokens) for tokens in sub_path_tokens]
+                for sub_path_tokens in list_of_sub_path_annotation_tokens
+            ],
+            list_of_sub_path_edges,
             starting_nodes,
         )
         return result
@@ -98,26 +104,33 @@ class BaseMatcher:
     def find_available_choices(
         self,
         visited_nodes: List[int],
-        previous_nodes: List[int],
-        prune_similar_edges: bool = False,
-    ) -> Tuple[List[str], List[int], List[Edge]]:
+        start_nodes: List[int],
+        target_nodes: List[int],
+        max_depth: int = 2,
+        only_target: bool = False,
+    ) -> Tuple[List[List[str]], List[List[int]], List[List[Edge]]]:
         """
         Returns:
-            A list of edge annotations, a list of next node ids the edge is
-            leading to (not necessarily the target node of the edge),
-            and a list of corresponding edges
+            A list containing several sub list of edge annotations,
+            each sub list corresponding to a sub path.
+            A list of next node ids the path is leading to. If the path ends with 
+            a composite node, its component nodes are returned.
+            A list of sub list of corresponding edges.
         """
         (
-            edges_annotation_tokens,
-            next_nodes,
-            edges,
+            list_of_sub_path_annotation_tokens,
+            list_of_sub_path_next_nodes,
+            list_of_sub_path_edges,
         ) = self.matcher.find_available_choices(
-            visited_nodes, previous_nodes, prune_similar_edges
+            visited_nodes, start_nodes, target_nodes, max_depth, only_target
         )
         return (
-            [self.tokenizer.decode(tokens) for tokens in edges_annotation_tokens],
-            next_nodes,
-            edges,
+            [
+                [self.tokenizer.decode(tokens) for tokens in sub_path_tokens]
+                for sub_path_tokens in list_of_sub_path_annotation_tokens
+            ],
+            list_of_sub_path_next_nodes,
+            list_of_sub_path_edges,
         )
 
     def match_source_and_target_nodes(

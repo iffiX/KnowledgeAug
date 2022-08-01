@@ -1,3 +1,4 @@
+import copy
 import random
 from typing import Dict, List, Tuple
 from transformers import PreTrainedTokenizerBase
@@ -14,6 +15,7 @@ class OpenBookQAAugDataset(OpenBookQADataset):
     ):
         self.augment_contexts = augment_contexts
         self.rand = random.Random(42)
+        self.rand_train = True
         super(OpenBookQAAugDataset, self).__init__(
             tokenizer,
             max_seq_length=max_seq_length,
@@ -40,17 +42,34 @@ class OpenBookQAAugDataset(OpenBookQADataset):
         else:
             data = self.test_data[index]
 
+        data = copy.deepcopy(data)
+
         if split != "train":
             augment_context = self.augment_contexts[0].get(data["id"], [])
         else:
-            # ref_context = self.augment_contexts[1].get(data["id"])
-            # augment_context = self.augment_contexts[0].get(data["id"], None)
-            # if augment_context is not None:
-            #     augment_context = self.rand.choice([ref_context, augment_context])
-            # else:
-            #     augment_context = ref_context
+            if self.rand_train:
+                ref_context = self.augment_contexts[1].get(data["id"])
+                augment_context = self.augment_contexts[0].get(data["id"], None)
+                if augment_context is not None:
+                    augment_context = self.rand.choice([ref_context, augment_context])
+                else:
+                    augment_context = ref_context
+            else:
+                augment_context = self.augment_contexts[1].get(data["id"])
 
-            augment_context = self.augment_contexts[1].get(data["id"])
+        if split != "train":
+            if "all of these" in data["choices"]:
+                idx = data["choices"].index("all of these")
+                other_idx = [x for x in range(len(data["choices"])) if x != idx]
+                data["choices"][idx] = (
+                    ", ".join(data["choices"][i] for i in other_idx[:-1])
+                    + " and "
+                    + data["choices"][other_idx[-1]]
+                )
+            elif "b and d" in data["choices"]:
+                data["choices"][data["choices"].index("b and d")] = (
+                    data["choices"][1] + " and " + data["choices"][3]
+                )
 
         if self.output_mode == "single":
             encoded_sentence = self.tokenizer(

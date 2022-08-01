@@ -182,7 +182,7 @@ class OpenBookQASampleTrainConfig(BaseModel):
     matcher_config: Optional[dict] = None
     match_closest_when_no_equal: bool = True
 
-    max_steps: int = 5
+    max_steps: int = 2
     beam_size: int = 10
     return_beam_num: int = 5
     min_logits: Union[float, None] = None
@@ -194,6 +194,32 @@ class OpenBookQASampleTrainConfig(BaseModel):
 
 
 class OpenBookQAAugmentTrainConfig(BaseModel):
+    load: bool = False
+    seed: int = 42
+    save: bool = True
+    save_last: bool = False
+    epochs: int = 20
+    train_steps: Optional[int] = None
+    validate_steps: Optional[int] = None
+    batch_size: int = 16
+    accumulate_grad_batches: int = 1
+
+    optimizer_class: str = "AdamW"
+    learning_rate: float = 5e-6
+    l2_regularization: float = 0
+    scheduler_warmup_proportion: float = 0
+    scheduler_cycles: int = 1
+
+    base_type: str = "microsoft/deberta-v3-large"
+    model_configs: Optional[dict] = None
+    max_seq_length: int = 256
+    generate_length: int = 20
+    device_map: Optional[Dict[int, List[int]]] = None
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+
+class OpenBookQAAugmentCompareTrainConfig(BaseModel):
     load: bool = False
     seed: int = 42
     save: bool = True
@@ -356,6 +382,7 @@ def stage_name_to_config(name: str, config_dict: dict = None):
         "openbook_qa_search": OpenBookQASearchTrainConfig,
         "openbook_qa_sample": OpenBookQASampleTrainConfig,
         "openbook_qa_augment": OpenBookQAAugmentTrainConfig,
+        "openbook_qa_augment_compare": OpenBookQAAugmentCompareTrainConfig,
         "arc": ARCTrainConfig,
         "arc_search": ARCSearchTrainConfig,
         "ensemble": EnsembleTrainConfig,

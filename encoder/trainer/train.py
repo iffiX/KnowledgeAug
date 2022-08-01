@@ -1,6 +1,7 @@
 import re
 import os
 import logging
+import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
 from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
@@ -9,6 +10,7 @@ from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_search_trainer import OpenBookQASearchTrainer
 from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
+from .openbook_qa_augment_compare_trainer import OpenBookQAAugmentCompareTrainer
 from .arc_trainer import ARCTrainer
 from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
@@ -25,6 +27,7 @@ stage_name_to_trainer_map = {
     "openbook_qa_search": OpenBookQASearchTrainer,
     "openbook_qa_sample": OpenBookQASampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
+    "openbook_qa_augment_compare": OpenBookQAAugmentCompareTrainer,
     "test_distributed": TestDistributedTrainer,
     "arc": ARCTrainer,
     "arc_search": ARCSearchTrainer,
@@ -263,12 +266,69 @@ def run(config: Config, stage_index: int, mode: str = "train"):
             plugins=[DDPPlugin(find_unused_parameters=True)]
             if is_distributed
             else None,
-            deterministic=True,
+            # deterministic=True,
         )
         trainer.stage_mode = mode
         if mode == "validate":
+            # if isinstance(stage_trainer, OpenBookQAAugmentTrainer):
+            #     trainer.fit(stage_trainer)
+            # else:
+            #     trainer.validate(stage_trainer)
             trainer.validate(stage_trainer)
         else:
             trainer.test(stage_trainer)
+    elif mode == "evaluate_model":
+        logging.info("Evaluating model.")
+
+        checkpoint = find_checkpoint(checkpoint_path)
+        if checkpoint is None:
+            raise RuntimeError("Cannot find a valid checkpoint.")
+        else:
+            logging.info(f"Using checkpoint {checkpoint}")
+
+        stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
+        is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
+            isinstance(config.gpus, int) and config.gpus > 1
+        )
+
+        stage_trainer.is_distributed = is_distributed
+        if (
+            config.override_saved_config is not None
+            and str(stage_index) in config.override_saved_config
+        ):
+            override_saved_config(
+                stage_trainer, config.override_saved_config[str(stage_index)]
+            )
+        while True:
+            sentence = input("Input: ")
+            batch = stage_trainer.tokenizer(sentence, return_tensors="pt",)
+            if "t5-" in stage_trainer.config.base_type:
+                tokens = stage_trainer.model.generate(
+                    input_ids=batch["input_ids"].to(stage_trainer.real_device),
+                    attention_mask=batch["attention_mask"].to(
+                        stage_trainer.real_device
+                    ),
+                    max_length=stage_trainer.config.generate_length,
+                    early_stopping=True,
+                )
+                out = [
+                    stage_trainer.tokenizer.decode(tokens[i])
+                    for i in range(tokens.shape[0])
+                ]
+            else:
+                for predictor in stage_trainer.model.choice_predictors.items():
+                    predictor[1].choice_num = 1
+                out = stage_trainer.model.predict(
+                    input_ids=batch["input_ids"].to(stage_trainer.real_device),
+                    attention_mask=batch["attention_mask"].to(
+                        stage_trainer.real_device
+                    ),
+                    token_type_ids=batch["token_type_ids"].to(
+                        stage_trainer.real_device
+                    ),
+                )
+                out = t.sigmoid(out)
+            print("Output:")
+            print(out)
     else:
         raise ValueError(f"Unknown mode {mode}")

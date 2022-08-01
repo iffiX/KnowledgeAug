@@ -20,6 +20,10 @@ if __name__ == "__main__":
 
     p_test = subparsers.add_parser("test", help="Start testing.")
 
+    p_evaluate_model = subparsers.add_parser(
+        "evaluate_model", help="Start evaluating model."
+    )
+
     p_train.add_argument(
         "--config", type=str, required=True, help="Path of the config file.",
     )
@@ -41,6 +45,14 @@ if __name__ == "__main__":
     )
 
     p_test.add_argument(
+        "--stage", type=int, default=None, help="Stage number to run.",
+    )
+
+    p_evaluate_model.add_argument(
+        "--config", type=str, required=True, help="Path of the config file.",
+    )
+
+    p_evaluate_model.add_argument(
         "--stage", type=int, default=None, help="Stage number to run.",
     )
 
@@ -65,7 +77,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    if args.command in ("train", "validate", "test"):
+    if args.command in ("train", "validate", "test", "evaluate_model"):
         config = load_config(args.config)
         assert len(config.stages) == len(
             config.configs

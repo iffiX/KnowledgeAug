@@ -138,28 +138,32 @@ int main() {
 //                                    1037,3036,5468,2012,1037,2054,1029};
 //    std::vector<int> targetMask{0,0,1,0,0,0,0,1,1,0,0,0,0,0,0,0,1,1,0,0,0,0};
 //    KnowledgeMatcher matcher("/data/conceptnet-archive.data");
+
 //    matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask,
 //                                 300, 2, 12,1920301,0.5,0);
 
-    std::vector<int> sourceSentence{2065,1037,13774,2003,10768,1010,2008,13774,2003,1029};
-    std::vector<int> sourceMask{0,0,1,0,1,0,0,1,0,0};
-    std::vector<int> targetSentence{3707,13774,2065,1037,13774,2003,10768,1010,2008,13774,2003,1029};
-    std::vector<int> targetMask{1,1,0,0,1,0,1,0,0,1,0,0};
-    //std::vector<std::vector<int>> rankFocus{{2242,2017}};
+//    std::vector<int> sourceSentence{2065,1037,13774,2003,10768,1010,2008,13774,2003,1029};
+//    std::vector<int> sourceMask{0,0,1,0,1,0,0,1,0,0};
+//    std::vector<int> targetSentence{3707,13774,2065,1037,13774,2003,10768,1010,2008,13774,2003,1029};
+//    std::vector<int> targetMask{1,1,0,0,1,0,1,0,0,1,0,0};
+//    //std::vector<std::vector<int>> rankFocus{{2242,2017}};
     KnowledgeMatcher matcher("/home/muhan/data/workspace/kb_encoder/data/preprocess/conceptnet-archive.data");
-
-    // matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask, 1000, 3, 697474, 10, 1, true, 0);
-    matcher.kb.addCompositeNode("hawks eat lizards",
+    //auto nodes = matcher.kb.findNodes({"child", "organism"});
+    //cout << matcher.kb.cosineSimilarity(nodes[0], nodes[1]);
+//    matcher.findAvailableChoices({4760,1165772}, {379995,24647,4169}, {1248,4709});
+//    // matcher.matchByNodeEmbedding(sourceSentence, targetSentence, sourceMask, targetMask, 1000, 3, 697474, 10, 1, true, 0);
+    matcher.kb.addCompositeNode("detailed observation of celestial objects requires a telescope",
                                 "RelatedTo",
-                                std::vector<int>{12505, 4521, 23898},
-                                std::vector<int>{1, 1, 1});
+                                std::vector<int>{6851, 8089, 1997, 17617, 5200, 5942, 1037, 12772},
+                                std::vector<int>{1, 1, 0, 1, 1, 1, 0, 1});
     matcher.findShortestPath(
-        std::vector<int>{1999,1996,5532,1010,1037,9881,2089,5959,2019,8138},
-        std::vector<int>{16360,15286},
-        std::vector<std::string>{"hawks eat lizards"},
-        std::vector<int>{0,0,1,0,0,1,0,1,0,1},
+        std::vector<int>{2478,13536,2000,3579,5067,2422,2013,16581,4230,4473,1029},
+        std::vector<int>{6851,8089},
+        std::vector<std::string>{"detailed observation of celestial objects requires a telescope"},
+        std::vector<int>{1,1,0,1,1,1,0,1,1,1,0},
         std::vector<int>{1,1},
-        3
+        3,
+        0
     );
 
 //    matcher.matchByToken(sourceSentence, targetSentence, sourceMask, targetMask,

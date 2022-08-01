@@ -33,11 +33,11 @@
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"min_logits": -3, "return_beam_num": 10}},
+    "override_saved_config": {"0": {"min_logits": -2, "max_steps": 1}},
     "early_stopping_patience": 15,
-    "gpus": [0, 1],
+    "gpus": [0],
     "stages": [
         "openbook_qa_sample"
     ],
-    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_ob_qa_sample2"
+    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_ob_qa_sample4"
 }

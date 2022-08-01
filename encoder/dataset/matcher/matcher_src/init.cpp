@@ -121,8 +121,10 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("split_node_minimum_similarity") = 0.35)
             .def("find_available_choices", &KnowledgeMatcher::findAvailableChoices,
                  py::arg("visited_nodes"),
-                 py::arg("previous_nodes"),
-                 py::arg("prune_similar_edges") = false)
+                 py::arg("start_nodes"),
+                 py::arg("target_nodes"),
+                 py::arg("max_depth") = 2,
+                 py::arg("only_target") = false)
             .def("match_source_and_target_nodes", &KnowledgeMatcher::matchSourceAndTargetNodes,
                  py::arg("source_sentence"),
                  py::arg("target_sentence"),

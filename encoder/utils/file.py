@@ -7,6 +7,7 @@ import gzip
 import zipfile
 import shutil
 import requests
+import torch
 from tqdm.auto import tqdm
 
 
@@ -146,3 +147,19 @@ class PickleCache(SafeCacheBase):
     def save(self, data, path):
         with open(path, "wb") as file:
             pickle.dump(data, file)
+
+
+class TorchCache(SafeCacheBase):
+    def load(self, path, validate_func):
+        try:
+            with open(path, "rb") as file:
+                data = torch.load(file)
+        except:
+            return None
+        if not validate_func(data):
+            return None
+        return data
+
+    def save(self, data, path):
+        with open(path, "wb") as file:
+            torch.save(data, file)

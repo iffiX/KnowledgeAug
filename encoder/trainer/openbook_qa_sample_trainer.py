@@ -54,6 +54,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
+        self.test_result = {}
 
     @property
     def monitor(self):
@@ -73,6 +74,11 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         ]
 
     def test_dataloader(self):
+        path = os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json")
+        if os.path.exists(path):
+            with open(path, "r",) as file:
+                self.test_result.update(json.load(file))
+            print(f"Existing results num: {len(self.test_result)}")
         return [
             self.create_sample_inference_dataloader("train"),
             self.create_sample_inference_dataloader("validate"),
@@ -94,41 +100,42 @@ class OpenBookQASampleTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def validation_step(self, batch, _batch_idx, _dataloader_idx):
-        if self.current_epoch < 4:
-            return {
-                "accuracy": 0.01 * self.current_epoch,
-                "f1": 0.01 * self.current_epoch,
-                "is_right_max": 0.01 * self.current_epoch,
-            }
-        else:
-            state, action, wrong_actions = batch[0]
-            states = [state] * (1 + len(wrong_actions))
-            actions = [action] + wrong_actions
-            labels = np.array([1] + [0] * len(wrong_actions))
-            logits = (
-                self.reward_predictor(
-                    states,
-                    actions,
-                    inference=True,
-                    inference_batch_size=self.config.inference_batch_size,
-                )
-                .squeeze(1)
-                .cpu()
+        # if self.current_epoch < 4:
+        #     return {
+        #         "accuracy": 0.01 * self.current_epoch,
+        #         "f1": 0.01 * self.current_epoch,
+        #         "is_right_max": 0.01 * self.current_epoch,
+        #     }
+        # else:
+
+        state, action, wrong_actions = batch[0]
+        states = [state] * (1 + len(wrong_actions))
+        actions = [action] + wrong_actions
+        labels = np.array([1] + [0] * len(wrong_actions))
+        logits = (
+            self.reward_predictor(
+                states,
+                actions,
+                inference=True,
+                inference_batch_size=self.config.inference_batch_size,
             )
-            # equal to sigmoid > 0.5
-            predict_labels = (logits > 0).numpy()
-            is_right_max = t.argmax(logits).item() == 0
-            return {
-                "accuracy": accuracy_score(labels, predict_labels),
-                "f1": f1_score(labels, predict_labels),
-                "is_right_max": is_right_max,
-            }
+            .squeeze(1)
+            .cpu()
+        )
+        # equal to sigmoid > 0.5
+        predict_labels = (logits > 0).numpy()
+        is_right_max = t.argmax(logits).item() == 0
+        return {
+            "accuracy": accuracy_score(labels, predict_labels),
+            "f1": f1_score(labels, predict_labels),
+            "is_right_max": is_right_max,
+        }
 
     def validation_epoch_end(self, outputs):
-        if self.current_epoch < 4:
-            print(
-                f"Skipping validation for {self.current_epoch}/4 epochs for faster training"
-            )
+        # if self.current_epoch < 4:
+        #     print(
+        #         f"Skipping validation for {self.current_epoch}/4 epochs for faster training"
+        #     )
         for prefix, dataloader_idx in (("val", 0), ("test", 1)):
             average_accuracy = float(
                 np.mean([o["accuracy"] for o in outputs[dataloader_idx]])
@@ -153,10 +160,12 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             print(f"{prefix}_is_right_max_accuracy: {average_is_right_max_accuracy}")
 
     # def on_test_start(self) -> None:
-    #     print(f"Rank: {get_rank()}, min_logits={self.config.min_logits}")
+    #     # print(f"Rank: {get_rank()}, min_logits={self.config.min_logits}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx, _dataloader_id):
         # print(f"Inferenced action num: {batch[0][-1]}")
+        if batch[0][1] is None:
+            return None
         return batch[0]
 
     def test_epoch_end(self, outputs):
@@ -178,7 +187,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         self, outputs: List[Tuple[Tuple[int, int], Tuple[str, List[str], int]]]
     ):
         if not self.is_distributed or get_rank() == 0:
-            result = {}
+            result = self.test_result
             sorted_outputs = [o[1][:-1] for o in sorted(outputs, key=lambda o: o[0])]
             for id, paths in sorted_outputs:
                 result[id] = paths
@@ -254,17 +263,22 @@ class OpenBookQASampleTrainer(pl.LightningModule):
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
             dataset=RewardPredictorBestFirstBeamSearchDataset(
+                # [
+                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
+                #     for d in getattr(self.dataset, f"original_{split}_data")
+                # ][:520]
+                # if split == "train"
+                # else [
+                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
+                #     for d in getattr(self.dataset, f"original_{split}_data")
+                # ][:2],
                 [
-                    (d["id"], d["text_question"], d["text_choices"],)
+                    (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"original_{split}_data")
-                ][:100]
-                if split == "validate"
-                else [
-                    (d["id"], d["text_question"], d["text_choices"],)
-                    for d in getattr(self.dataset, f"original_{split}_data")
-                ][:1],
+                ],
                 self.reward_predictor,
                 self.dataset.matcher,
+                existing_ids=set(self.test_result.keys()),
                 max_steps=self.config.max_steps,
                 beam_size=self.config.beam_size,
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),

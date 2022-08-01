@@ -1,8 +1,8 @@
 #ifndef MATCHER_H
 #define MATCHER_H
 // Uncomment below macro to enable viewing the decision process
-#define DEBUG_DECISION
-#define DEBUG
+//#define DEBUG_DECISION
+//#define DEBUG
 #include "cista.h"
 #include "highfive/H5File.hpp"
 #include "highfive/H5DataSet.hpp"
@@ -241,9 +241,13 @@ public:
     };
 
     typedef std::unordered_map<size_t, std::tuple<size_t, std::vector<std::vector<int>>, std::vector<float>>> SelectResult;
-    typedef std::tuple<std::vector<std::vector<int>>, std::vector<Edge>, std::vector<std::vector<long>>> PathResult;
+    typedef std::tuple<std::vector<std::vector<std::vector<int>>>,
+                       std::vector<std::vector<Edge>>,
+                       std::vector<std::vector<long>>> PathResult;
     typedef std::tuple<std::vector<long>, std::vector<long>> SourceAndTargetNodes;
-    typedef std::tuple<std::vector<std::vector<int>>, std::vector<long>, std::vector<Edge>> ChoiceResult;
+    typedef std::tuple<std::vector<std::vector<std::vector<int>>>,
+                       std::vector<std::vector<long>>,
+                       std::vector<std::vector<Edge>>> ChoiceResult;
 
 public:
     KnowledgeBase kb;
@@ -258,27 +262,27 @@ public:
 
     void setCorpus(const std::vector<std::vector<int>> &corpus);
 
-    std::string findClosestConcept(std::string targetConcept, const std::vector<std::string> &concepts);
-
-    
+    std::string findClosestConcept(std::string targetConcept, const std::vector<std::string> &concepts) const;
 
     PathResult findShortestPath(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence,
                                 const std::vector<std::string> &intermediateNodes,
                                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
                                 int maxDepthForEachNode = 3,
                                 size_t splitNodeMinimumEdgeNum = 20,
-                                float splitNodeMinimumSimilarity = 0.35);
+                                float splitNodeMinimumSimilarity = 0.35) const;
 
-    ChoiceResult findAvailableChoices(const std::vector<long> &visitedNodes, const std::vector<long> &previousNodes, bool pruneSimilarEdges = false);
-
-
+    ChoiceResult findAvailableChoices(const std::vector<long> &visitedNodes,
+                                      const std::vector<long> &startNodes,
+                                      const std::vector<long> &targetNodes,
+                                      int maxDepth = 2,
+                                      bool onlyTarget = false) const;
 
     SourceAndTargetNodes matchSourceAndTargetNodes(const std::vector<int> &sourceSentence,
                                                    const std::vector<int> &targetSentence,
                                                    const std::vector<int> &sourceMask = {},
                                                    const std::vector<int> &targetMask = {},
                                                    size_t splitNodeMinimumEdgeNum = 20,
-                                                   float splitNodeMinimumSimilarity = 0.35);
+                                                   float splitNodeMinimumSimilarity = 0.35) const;
 
     MatchResult
     matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
