@@ -125,6 +125,11 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_nodes"),
                  py::arg("max_depth") = 2,
                  py::arg("only_target") = false)
+            .def("sub_paths_to_annotations", &KnowledgeMatcher::subPathsToAnnotations,
+                 py::arg("sub_paths"),
+                 py::arg("relationship_templates"),
+                 py::arg("prioritize_original_annotation") = true,
+                 py::arg("lower_case") = true)
             .def("match_source_and_target_nodes", &KnowledgeMatcher::matchSourceAndTargetNodes,
                  py::arg("source_sentence"),
                  py::arg("target_sentence"),

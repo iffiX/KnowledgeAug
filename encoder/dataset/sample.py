@@ -4,7 +4,7 @@ import random
 import multiprocessing as mp
 import tqdm
 import torch as t
-from typing import List, Tuple, Set, Union
+from typing import List, Tuple, Set, Union, Any, Optional
 from torch.utils.data import Dataset
 from .matcher.base import BaseMatcher
 from ..utils.settings import preprocess_cache_dir
@@ -18,20 +18,20 @@ class RewardPredictorDatasetCreator:
         self,
         data: List[Tuple[str, str, str, List[str]]],
         matcher: BaseMatcher,
-        max_steps: int = 5,
+        max_depth: int = 2,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
     ):
         self.data = data
         self.matcher = matcher
-        self.max_steps = max_steps
+        self.max_depth = max_depth
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
 
     @staticmethod
-    def initialize_pool(data, matcher, max_steps, state_delimiter, end_of_reasoning):
+    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
         RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreator(
-            data, matcher, max_steps, state_delimiter, end_of_reasoning
+            data, matcher, max_depth, state_delimiter, end_of_reasoning
         )
 
     @staticmethod
@@ -42,6 +42,7 @@ class RewardPredictorDatasetCreator:
                 source_sentence=self.data[idx][0],
                 target_sentence=self.data[idx][2],
                 intermediate_nodes=self.data[idx][3],
+                max_depth_for_each_node=self.max_depth,
             )
             _, target_nodes = self.matcher.match_source_and_target_nodes(
                 self.data[idx][0], self.data[idx][2]
@@ -69,7 +70,10 @@ class RewardPredictorDatasetCreator:
                         _,
                         list_of_neg_sub_path_edges,
                     ) = self.matcher.find_available_choices(
-                        visited_nodes, start_nodes, target_nodes
+                        visited_nodes,
+                        start_nodes,
+                        target_nodes,
+                        max_depth=self.max_depth,
                     )
 
                     # exclude the right sub path
@@ -105,8 +109,8 @@ class RewardPredictorDataset(Dataset):
         name: str,
         data: List[Tuple[str, str, str, List[str]]],
         matcher: BaseMatcher,
-        skip: bool = False,
-        max_steps: int = 5,
+        limit_size: int = None,
+        max_depth: int = 2,
         negative_samples: Union[int, None] = 5,
         negative_shuffle_seed: int = 42,
         state_delimiter: str = ", ",
@@ -120,7 +124,7 @@ class RewardPredictorDataset(Dataset):
         self.data = data
         self.rand = random.Random(negative_shuffle_seed)
         self.matcher = matcher
-        self.max_steps = max_steps
+        self.max_depth = max_depth
         self.negative_samples = negative_samples
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
@@ -131,11 +135,11 @@ class RewardPredictorDataset(Dataset):
         ) as cache:
             self.pretrain_data = cache.data
 
-        if skip:
+        if limit_size is not None:
             self.pretrain_data = (
-                self.pretrain_data[0][:1],
-                self.pretrain_data[1][:1],
-                self.pretrain_data[2][:1],
+                self.pretrain_data[0][:limit_size],
+                self.pretrain_data[1][:limit_size],
+                self.pretrain_data[2][:limit_size],
             )
 
     def __len__(self):
@@ -186,7 +190,7 @@ class RewardPredictorDataset(Dataset):
             initargs=(
                 self.data,
                 self.matcher,
-                self.max_steps,
+                self.max_depth,
                 self.state_delimiter,
                 self.end_of_reasoning,
             ),
@@ -214,7 +218,8 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         predictor,
         matcher: BaseMatcher,
         existing_ids: Set[str] = None,
-        max_steps: int = 5,
+        max_steps: int = 2,
+        max_depth: int = 2,
         beam_size: int = 20,
         return_beam_num: int = 1,
         max_inference_num: int = 20000,
@@ -234,6 +239,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         self.matcher = matcher
         self.existing_ids = existing_ids or set()
         self.max_steps = max_steps
+        self.max_depth = max_depth
         self.beam_size = beam_size
         self.return_beam_num = return_beam_num
         self.max_inference_num = max_inference_num
@@ -279,6 +285,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         )
 
         completed_sequences = []
+        completed_sequences_edges = []
 
         while (
             not len(completed_sequences) >= self.return_beam_num
@@ -294,7 +301,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
             if self.is_hypothesis_ended(h):
                 h = self.extend_hypothesis(
-                    h, self.EOS, (), self.return_and_increase(push_count)
+                    h, (self.EOS, None), (), self.return_and_increase(push_count)
                 )
                 heapq.heappush(q, h)
             else:
@@ -308,7 +315,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
                 if length > 0 and has_reached:
                     h = self.extend_hypothesis(
-                        h, self.EOS, (), self.return_and_increase(push_count)
+                        h, (self.EOS, None), (), self.return_and_increase(push_count)
                     )
                     heapq.heappush(q, h)
                 else:
@@ -330,6 +337,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                             visited_nodes,
                             current_reached_nodes,
                             target_nodes,
+                            max_depth=self.max_depth,
                             only_target=length == self.max_steps - 1
                             and self.max_steps > 1,
                         )
@@ -402,7 +410,12 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
                             new_h = self.extend_hypothesis(
                                 h,
-                                annotations[action],
+                                (
+                                    annotations[action],
+                                    tuple(list_of_sub_path_edges[action])
+                                    if len(list_of_sub_path_edges[action]) > 0
+                                    else None,
+                                ),
                                 new_additional_data,
                                 self.return_and_increase(push_count),
                                 new_score,
@@ -412,13 +425,17 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                     else:
                         # Assign probability 1 to EOS (log prob = 0)
                         new_h = self.extend_hypothesis(
-                            h, self.EOS, (), self.return_and_increase(push_count)
+                            h,
+                            (self.EOS, None),
+                            (),
+                            self.return_and_increase(push_count),
                         )
                         heapq.heappush(q, new_h)
 
             if self.is_hypothesis_ended(q[0]):
                 h = heapq.heappop(q)
                 completed_sequences.append(self.get_sequence(h))
+                completed_sequences_edges.append(self.get_sequence_edges(h))
 
         if inferenced_action_num >= self.max_inference_num:
             print(f"idx = {idx}, inference bound reached, stopping early")
@@ -428,13 +445,15 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
             for i in range(self.return_beam_num):
                 h = heapq.heappop(q)
                 h = self.extend_hypothesis(
-                    h, self.EOS, (), self.return_and_increase(push_count)
+                    h, (self.EOS, None), (), self.return_and_increase(push_count)
                 )
                 completed_sequences.append(self.get_sequence(h))
+                completed_sequences_edges.append(self.get_sequence_edges(h))
 
         return (
             self.data[idx][0],
             completed_sequences,
+            completed_sequences_edges,
             inferenced_action_num,
         )
 
@@ -475,13 +494,24 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
     @staticmethod
     def create_hypothesis(score, sequence, additional_data, push_count):
         # heap q put smallest item at front
+        # sequence is stored as a tuple of 2-element tuples,
+        # the first element is the text annotation (or self.EOS, which is equal to None for END_OF_REASONING)
+        # the second element is the tuple of edges (or None for END_OF_REASONING)
         return -score, len(sequence), push_count, (sequence, additional_data)
 
     @staticmethod
     def extend_hypothesis(
-        hypothesis, item, new_additional_data, new_push_count, new_score=None
+        hypothesis: Tuple[float, int, int, tuple],
+        item: Tuple[Union[str, None], Union[tuple, None]],
+        new_additional_data: Any,
+        new_push_count: int,
+        new_score: Optional[float] = None,
     ):
-        if len(hypothesis[3][0]) > 1 and hypothesis[3][0][-1] is None and item is None:
+        if (
+            len(hypothesis[3][0]) > 1
+            and hypothesis[3][0][-1][0] is None
+            and item[0] is None
+        ):
             extend = ()
         else:
             extend = (item,)
@@ -502,7 +532,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
     @staticmethod
     def is_hypothesis_ended(hypothesis):
-        return len(hypothesis[3][0]) > 0 and hypothesis[3][0][-1] is None
+        return len(hypothesis[3][0]) > 0 and hypothesis[3][0][-1][0] is None
 
     @staticmethod
     def get_hypothesis_length(hypothesis):
@@ -517,6 +547,8 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         return hypothesis[3][1]
 
     def get_sequence(self, hypothesis):
-        return tuple(
-            h if h is not None else self.end_of_reasoning for h in hypothesis[3][0]
-        )
+        return tuple(segment[0] for segment in hypothesis[3][0][:-1])
+
+    @staticmethod
+    def get_sequence_edges(hypothesis):
+        return tuple(segment[1] for segment in hypothesis[3][0][:-1])

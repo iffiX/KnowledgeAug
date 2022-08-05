@@ -257,41 +257,41 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                         * self.similarity_embedding[1],
                         dim=1,
                     )
-                    most_similar_train_indices = t.topk(similarity, k=18).indices
+                    most_similar_train_indices = t.topk(similarity, k=12).indices
                     for i in range(len(most_similar_train_indices)):
-                        if similarity[most_similar_train_indices[i]] < 0.62:
+                        if similarity[most_similar_train_indices[i]] < 0.60:
                             break
 
                     # most_similar_train_indices = t.topk(similarity, k=8).indices
                     # i = 8
+                    for _ in range(2):
+                        if i > 0:
+                            most_similar_train_indices = most_similar_train_indices[:i]
 
-                    if i > 0:
-                        most_similar_train_indices = most_similar_train_indices[:i]
-
-                        batch_size = 4
-                        for b in tqdm.tqdm(
-                            range(0, len(most_similar_train_indices), batch_size)
-                        ):
-                            train_batch = collate_function_dict_to_batch_encoding(
-                                [
-                                    self.dataset.train_dataset[x]
-                                    for x in most_similar_train_indices[
-                                        b : b + batch_size
-                                    ]
-                                ],
-                            ).to(self.real_device)
-                            optim.zero_grad()
-                            loss = (
-                                model(
-                                    input_ids=train_batch["sentence"],
-                                    attention_mask=train_batch["mask"],
-                                    token_type_ids=train_batch["type_ids"],
-                                    labels=train_batch["label"],
-                                ).loss
-                                # / 4
-                            )
-                            loss.backward()
-                            optim.step()
+                            batch_size = 4
+                            for b in tqdm.tqdm(
+                                range(0, len(most_similar_train_indices), batch_size)
+                            ):
+                                train_batch = collate_function_dict_to_batch_encoding(
+                                    [
+                                        self.dataset.train_dataset[x]
+                                        for x in most_similar_train_indices[
+                                            b : b + batch_size
+                                        ]
+                                    ],
+                                ).to(self.real_device)
+                                optim.zero_grad()
+                                loss = (
+                                    model(
+                                        input_ids=train_batch["sentence"],
+                                        attention_mask=train_batch["mask"],
+                                        token_type_ids=train_batch["type_ids"],
+                                        labels=train_batch["label"],
+                                    ).loss
+                                    # / 4
+                                )
+                                loss.backward()
+                                optim.step()
                 model.eval()
                 return {
                     "batch": batch.to("cpu"),
@@ -414,27 +414,46 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
         )
 
     def load_augment_contexts(self):
+        dataset = OpenBookQADataset(tokenizer=None)
+        matcher = dataset.matcher
         with open(
             os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json"), "r"
         ) as file:
-            contexts = json.load(file)
-            for id, context in contexts.items():
-                paths = []
-                for path in context:
-                    if len(path) > 2:
-                        path = path[:-2]
-                    else:
-                        path = path[:-1]
-                    paths.append(", ".join(path) + " # ")
+            raw_contexts = json.load(file)
+            contexts = {}
+            for id, (raw_paths, raw_path_edges) in raw_contexts.items():
+                if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
+                    raw_paths = [
+                        matcher.sub_paths_to_annotations(
+                            x, templates="natural", prioritize_original_annotation=True,
+                        )[0]
+                        for x in raw_path_edges
+                    ]
+
+                paths = [", ".join(path) + " # " for path in raw_paths]
                 contexts[id] = list(dict.fromkeys(paths))[:4]
-        # overwrite train context
+
+        # authoritative train context
+        train_contexts = {}
         with JSONCache(
             os.path.join(preprocess_cache_dir, f"openbook_qa_sample_train_result.json"),
             generate_func=self.generate_train_paths,
         ) as cache:
-
             print(f"Loaded {len(contexts)} contexts")
-            return contexts, cache.data
+            data = cache.data
+        for id, (raw_paths, raw_path_edges) in data.items():
+            if len(raw_paths) > 0:
+                raw_paths = dataset.matcher.sub_paths_to_annotations(
+                    raw_path_edges,
+                    templates="natural",
+                    prioritize_original_annotation=True,
+                )
+                # only the first level (corresponds to sample config)
+                train_contexts[id] = [", ".join(raw_paths[0]) + " # "]
+            else:
+                train_contexts[id] = []
+
+        return contexts, train_contexts
 
     def load_similarity_embedding(self):
         with TorchCache(
@@ -447,15 +466,16 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
 
     def generate_train_paths(self):
         dataset = OpenBookQADataset(tokenizer=None)
-        contexts = {}
+        train_paths = {}
         for d in tqdm.tqdm(dataset.original_train_data):
             result = dataset.matcher.find_shortest_path(
                 source_sentence=d["text_question"],
                 target_sentence=d["text_answer"],
                 intermediate_nodes=d["original_facts"],
+                max_depth_for_each_node=2,
             )
-            contexts[d["id"]] = [", ".join(result[0]) + " # "]
-        return contexts
+            train_paths[d["id"]] = (result[0], result[1])
+        return train_paths
 
     def generate_similarity_embedding(self):
         dataset = OpenBookQADataset(tokenizer=None)

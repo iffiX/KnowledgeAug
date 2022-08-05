@@ -9,6 +9,7 @@
 #include "xtensor/xadapt.hpp"
 #include "xtensor/xtensor.hpp"
 #include "highfive/H5File.hpp"
+#include <regex>
 #include <stack>
 #include <queue>
 #include <tuple>
@@ -1250,6 +1251,41 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         cout << endl;
     }
 #endif
+    return move(result);
+}
+
+vector<vector<string>>
+KnowledgeMatcher::subPathsToAnnotations(const std::vector<std::vector<Edge>> &subPaths,
+                                        const std::vector<std::string> &relationshipTemplates,
+                                        bool prioritizeOriginalAnnotation,
+                                        bool lowerCase) const {
+    if (relationshipTemplates.size() != kb.relationships.size())
+        throw std::invalid_argument(fmt::format(
+                "Relationship templates size {} doesn't match with relationship size {}",
+                relationshipTemplates.size(), kb.relationships.size()
+        ));
+    vector<vector<string>> result;
+    for (auto &subPath : subPaths) {
+        result.emplace_back(vector<string>{});
+        auto &subPathAnnotations = result.back();
+        for (auto &edge : subPath) {
+            if (prioritizeOriginalAnnotation and get<4>(edge).length() > 0) {
+                string annotation = get<4>(edge);
+                if (lowerCase)
+                    for_each(annotation.begin(), annotation.end(), [](char &c){ c = tolower(c); });
+                // remove leading, trailing and extra white spaces
+                subPathAnnotations.emplace_back(regex_replace(annotation, regex("^ +| +$|( ) +"), "$1"));
+            }
+            else {
+                string annotation = fmt::format(relationshipTemplates[get<1>(edge)],
+                                                kb.nodes[get<0>(edge)],
+                                                kb.nodes[get<2>(edge)]);
+                if (lowerCase)
+                    for_each(annotation.begin(), annotation.end(), [](char &c){ c = tolower(c); });
+                subPathAnnotations.emplace_back(annotation);
+            }
+        }
+    }
     return move(result);
 }
 

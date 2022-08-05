@@ -277,6 +277,11 @@ public:
                                       int maxDepth = 2,
                                       bool onlyTarget = false) const;
 
+    std::vector<std::vector<std::string>> subPathsToAnnotations(const std::vector<std::vector<Edge>> &subPaths,
+                                                                const std::vector<std::string> &relationshipTemplates,
+                                                                bool prioritizeOriginalAnnotation = true,
+                                                                bool lowerCase = true) const;
+
     SourceAndTargetNodes matchSourceAndTargetNodes(const std::vector<int> &sourceSentence,
                                                    const std::vector<int> &targetSentence,
                                                    const std::vector<int> &sourceMask = {},

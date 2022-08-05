@@ -4,7 +4,7 @@
             "base_type": "microsoft/deberta-v3-large",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 31,
+            "negative_samples": 7,
             "learning_rate": 5e-6,
             "inference_batch_size": 128,
             "load": false,

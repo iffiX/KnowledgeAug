@@ -1,3 +1,4 @@
+import re
 import nltk
 import spacy
 import logging
@@ -28,12 +29,121 @@ class BaseMatcher:
         "was",
         "were",
     }
+    NATURAL_TEMPLATES = {
+        "Antonym": "{0} is an antonym of {1}",
+        "AtLocation": "{0} is located at {1}",
+        "CapableOf": "{0} can {1}",
+        "Causes": "{0} causes {1}",
+        "CausesDesire": "{0} would make you want to {1}",
+        "CreatedBy": "{0} is created by {1}",
+        "DefinedAs": "{0} is defined as {1}",
+        "DerivedFrom": "{0} is derived from {1}",
+        "Desires": "{0} wants {1}",
+        "DistinctFrom": "{0} is different from {1}",
+        "Entails": "{0} entails {1}",
+        "EtymologicallyDerivedFrom": "etymologically {0} is derived from {1}",
+        "EtymologicallyRelatedTo": "etymologically {0} is related to {1}",
+        "FormOf": "{0} is a word form of {1}",
+        "HasA": "{0} has {1}",
+        "HasContext": "the context of {0} is {1}",
+        "HasFirstSubevent": "the first thing you do when you {0} is {1}",
+        "HasLastSubevent": "the last thing you do when you {0} is {1}",
+        "HasPrerequisite": "{0} requires {1}",
+        "HasProperty": "{0} has property {1}",
+        "HasSubevent": "something you might do while {0} is {1}",
+        "InstanceOf": "{0} is an instance of {1}",
+        "IsA": "{0} is a {1}",
+        "LocatedNear": "{0} is located near {1}",
+        "MadeOf": "{0} is made of {1}",
+        "MannerOf": "{0} is a way to {1}",
+        "MotivatedByGoal": "you would {0} because you want to {1}",
+        "NotCapableOf": "{0} do not {1}",
+        "NotDesires": "{0} doesn't want {1}",
+        "NotHasProperty": "{0} is not {1}",
+        "PartOf": "{0} is a part of {1}",
+        "ReceivesAction": "{0} is {1}",
+        "RelatedTo": "{0} is related to {1}",
+        "SimilarTo": "{0} is similar to {1}",
+        "SymbolOf": "{0} is a symbol of {1}",
+        "Synonym": "{0} is a synonym of {1}",
+        "UsedFor": "{0} is for {1}",
+        "capital": "{1} is the capital of {0}",
+        "field": "{0} is in the field of {1}",
+        "genre": "{0} is in the genre of {1}",
+        "genus": "{0} is in a genus of {1}",
+        "influencedBy": "{0} is influenced by {1}",
+        "knownFor": "{0} is known for {1}",
+        "language": "{0} is the language of {1}",
+        "leader": "the leader of {0} is {1}",
+        "occupation": "the occupation of {0} is {1}",
+        "product": "{0} produces {1}",
+    }
+
+    STANDARD_TEMPLATES = {
+        "Antonym": "({0}) <antonym> ({1})",
+        "AtLocation": "({0}) <at location> ({1})",
+        "CapableOf": "({0}) <capable of> ({1})",
+        "Causes": "({0}) <causes> ({1})",
+        "CausesDesire": "({0}) <causes desire> ({1})",
+        "CreatedBy": "({0}) <created by> ({1})",
+        "DefinedAs": "({0}) <defined as> ({1})",
+        "DerivedFrom": "({0}) <derived from> ({1})",
+        "Desires": "({0}) <desires> ({1})",
+        "DistinctFrom": "({0}) <distinct from> ({1})",
+        "Entails": "({0}) <entails> ({1})",
+        "EtymologicallyDerivedFrom": "({0}) <etymologically derived from> ({1})",
+        "EtymologicallyRelatedTo": "({0}) <etymologically related to> ({1})",
+        "FormOf": "({0}) <etymologically form of> ({1})",
+        "HasA": "({0}) <has a> ({1})",
+        "HasContext": "({0}) <has context> ({1})",
+        "HasFirstSubevent": "({0}) <has first sub event> ({1})",
+        "HasLastSubevent": "({0}) <has last sub event> ({1})",
+        "HasPrerequisite": "({0}) <has prerequisite> ({1})",
+        "HasProperty": "({0}) <has property> ({1})",
+        "HasSubevent": "({0}) <has sub event> ({1})",
+        "InstanceOf": "({0}) <instance of> ({1})",
+        "IsA": "({0}) <is a> ({1})",
+        "LocatedNear": "({0}) <located near> ({1})",
+        "MadeOf": "({0}) <made of> ({1})",
+        "MannerOf": "({0}) <manner of> ({1})",
+        "MotivatedByGoal": "({0}) <motivated by goal> ({1})",
+        "NotCapableOf": "({0}) <not capable of> ({1})",
+        "NotDesires": "({0}) <not desires> ({1})",
+        "NotHasProperty": "({0}) <not has property> ({1})",
+        "PartOf": "({0}) <part of> ({1})",
+        "ReceivesAction": "({0}) <receives action> ({1})",
+        "RelatedTo": "({0}) <related to> ({1})",
+        "SimilarTo": "({0}) <similar to> ({1})",
+        "SymbolOf": "({0}) <symbol of> ({1})",
+        "Synonym": "({0}) <synonym> ({1})",
+        "UsedFor": "({0}) <used for> ({1})",
+        "capital": "({0}) <capital> ({1})",
+        "field": "({0}) <field> ({1})",
+        "genre": "({0}) <genre> ({1})",
+        "genus": "({0}) <genus> ({1})",
+        "influencedBy": "({0}) <influenced by> ({1})",
+        "knownFor": "({0}) <known for> ({1})",
+        "language": "({0}) <language> ({1})",
+        "leader": "({0}) <leader> ({1})",
+        "occupation": "({0}) <occupation> ({1})",
+        "product": "({0}) <product> ({1})",
+    }
     STOPWORDS_SET = set(stopwords.words("english"))
 
     def __init__(self, tokenizer: PreTrainedTokenizerBase, matcher: KnowledgeMatcher):
         self.tokenizer = tokenizer
         self.matcher = matcher
         self.nlp = None
+        self.natural_relationship_templates = [
+            self.NATURAL_TEMPLATES[rel] for rel in matcher.kb.relationships
+        ]
+        self.standard_relationship_templates = [
+            self.STANDARD_TEMPLATES[rel] for rel in matcher.kb.relationships
+        ]
+        self.standard_no_symbol_templates = [
+            re.sub("\(|\)|<|>", "", self.STANDARD_TEMPLATES[rel])
+            for rel in matcher.kb.relationships
+        ]
 
     def find_closest_concept(self, target_concept: str, concepts: List[str]):
         if self.nlp is None:
@@ -96,6 +206,7 @@ class BaseMatcher:
                 [self.tokenizer.decode(tokens) for tokens in sub_path_tokens]
                 for sub_path_tokens in list_of_sub_path_annotation_tokens
             ],
+            # self.sub_paths_to_annotations(list_of_sub_path_edges, "standard_no_symbol"),
             list_of_sub_path_edges,
             starting_nodes,
         )
@@ -129,8 +240,34 @@ class BaseMatcher:
                 [self.tokenizer.decode(tokens) for tokens in sub_path_tokens]
                 for sub_path_tokens in list_of_sub_path_annotation_tokens
             ],
+            # self.sub_paths_to_annotations(list_of_sub_path_edges, "standard_no_symbol"),
             list_of_sub_path_next_nodes,
             list_of_sub_path_edges,
+        )
+
+    def sub_paths_to_annotations(
+        self,
+        sub_paths: List[List[Edge]],
+        templates: Union[str, List[str]] = "natural",
+        prioritize_original_annotation: bool = True,
+        lower_case: bool = True,
+    ) -> List[List[str]]:
+        if isinstance(templates, str):
+            if templates == "natural":
+                templates = self.natural_relationship_templates
+            elif templates == "standard":
+                templates = self.standard_relationship_templates
+                prioritize_original_annotation = False
+            elif templates == "standard_no_symbol":
+                templates = self.standard_no_symbol_templates
+                prioritize_original_annotation = False
+            else:
+                raise ValueError(f"Unknown templates configuration: {templates}")
+        return self.matcher.sub_paths_to_annotations(
+            sub_paths,
+            templates,
+            prioritize_original_annotation=prioritize_original_annotation,
+            lower_case=lower_case,
         )
 
     def match_source_and_target_nodes(

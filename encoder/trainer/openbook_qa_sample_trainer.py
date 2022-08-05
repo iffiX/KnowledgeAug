@@ -8,7 +8,12 @@ import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List, Tuple
 from torch.utils.data import DataLoader
-from torch.distributed import all_gather_object, get_world_size, get_rank
+from torch.distributed import (
+    all_gather_object,
+    get_world_size,
+    get_rank,
+    is_initialized,
+)
 from transformers import BatchEncoding
 from sklearn.metrics import accuracy_score, f1_score
 from .utils import make_scheduler
@@ -30,8 +35,6 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         stage_result_path="./",
         is_distributed=False,
     ):
-        if is_distributed:
-            raise ValueError("Distributed training not supported")
         super().__init__()
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
@@ -54,6 +57,32 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
+        self.reward_predictor_datasets = {
+            split: RewardPredictorDataset(
+                f"openbook_qa_{split}",
+                [
+                    (
+                        d["text_question"],
+                        d["text_choices"],
+                        d["text_answer"],
+                        d["original_facts"],
+                    )
+                    for d in getattr(self.dataset, f"original_{split}_data")
+                ],
+                self.dataset.matcher,
+                limit_size=limit_size,
+                max_depth=self.config.max_depth,
+                negative_samples=self.config.negative_samples
+                if split == "train"
+                else None,
+                negative_shuffle_seed=self.config.negative_shuffle_seed
+                if not is_initialized()
+                else self.config.negative_shuffle_seed + get_rank(),
+                state_delimiter=self.config.state_delimeter,
+                end_of_reasoning=self.config.end_of_reasoning,
+            )
+            for split, limit_size in (("train", None), ("validate", 1), ("test", 100))
+        }
         self.test_result = {}
 
     @property
@@ -69,7 +98,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
 
     def val_dataloader(self):
         return [
-            self.create_sample_dataloader("validate", skip=True),
+            self.create_sample_dataloader("validate"),
             self.create_sample_dataloader("test"),
         ]
 
@@ -99,7 +128,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         return loss
 
     # noinspection PyTypeChecker
-    def validation_step(self, batch, _batch_idx, _dataloader_idx):
+    def validation_step(self, batch, batch_idx, _dataloader_idx):
         # if self.current_epoch < 4:
         #     return {
         #         "accuracy": 0.01 * self.current_epoch,
@@ -126,17 +155,32 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         predict_labels = (logits > 0).numpy()
         is_right_max = t.argmax(logits).item() == 0
         return {
+            "idx": batch_idx,
             "accuracy": accuracy_score(labels, predict_labels),
             "f1": f1_score(labels, predict_labels),
             "is_right_max": is_right_max,
         }
 
     def validation_epoch_end(self, outputs):
-        # if self.current_epoch < 4:
-        #     print(
-        #         f"Skipping validation for {self.current_epoch}/4 epochs for faster training"
-        #     )
+        if self.is_distributed:
+            t.cuda.set_device(self.device)
+            gathered_outputs = [None] * get_world_size()
+            all_gather_object(gathered_outputs, outputs)
+            gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
+            self.validate_on_every_process(gathered_outputs)
+        else:
+            self.validate_on_every_process(outputs)
+
+    def validate_on_every_process(self, outputs):
         for prefix, dataloader_idx in (("val", 0), ("test", 1)):
+            existing_idx = set()
+            filtered_outputs = []
+            for o in outputs[dataloader_idx]:
+                if o["idx"] not in existing_idx:
+                    filtered_outputs.append(o)
+                    existing_idx.add(o["idx"])
+            outputs[dataloader_idx] = filtered_outputs
+
             average_accuracy = float(
                 np.mean([o["accuracy"] for o in outputs[dataloader_idx]])
             )
@@ -145,7 +189,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 np.mean([o["is_right_max"] for o in outputs[dataloader_idx]])
             )
             self.log(
-                f"{prefix}_accuracy", average_accuracy, prog_bar=True, sync_dist=True
+                f"{prefix}_accuracy", average_accuracy, prog_bar=True, sync_dist=True,
             )
             self.log(f"{prefix}_f1", average_f1, prog_bar=True, sync_dist=True)
             self.log(
@@ -154,10 +198,13 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 prog_bar=True,
                 sync_dist=True,
             )
-            print(f"Validation on {prefix} result:")
-            print(f"{prefix}_accuracy: {average_accuracy}")
-            print(f"{prefix}_f1: {average_f1}")
-            print(f"{prefix}_is_right_max_accuracy: {average_is_right_max_accuracy}")
+            if not self.is_distributed or get_rank() == 0:
+                print(f"Validation on {prefix} result:")
+                print(f"{prefix}_accuracy: {average_accuracy}")
+                print(f"{prefix}_f1: {average_f1}")
+                print(
+                    f"{prefix}_is_right_max_accuracy: {average_is_right_max_accuracy}"
+                )
 
     # def on_test_start(self) -> None:
     #     # print(f"Rank: {get_rank()}, min_logits={self.config.min_logits}")
@@ -189,8 +236,8 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         if not self.is_distributed or get_rank() == 0:
             result = self.test_result
             sorted_outputs = [o[1][:-1] for o in sorted(outputs, key=lambda o: o[0])]
-            for id, paths in sorted_outputs:
-                result[id] = paths
+            for id, paths, path_edges in sorted_outputs:
+                result[id] = (paths, path_edges)
             with open(
                 os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json"),
                 "w",
@@ -233,29 +280,9 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             ],
         )
 
-    def create_sample_dataloader(self, split, skip=False):
+    def create_sample_dataloader(self, split):
         return DataLoader(
-            dataset=RewardPredictorDataset(
-                f"openbook_qa_{split}",
-                [
-                    (
-                        d["text_question"],
-                        d["text_choices"],
-                        d["text_answer"],
-                        d["original_facts"],
-                    )
-                    for d in getattr(self.dataset, f"original_{split}_data")
-                ],
-                self.dataset.matcher,
-                skip=skip,
-                max_steps=self.config.max_steps,
-                negative_samples=self.config.negative_samples
-                if split == "train"
-                else None,
-                negative_shuffle_seed=self.config.negative_shuffle_seed,
-                state_delimiter=self.config.state_delimeter,
-                end_of_reasoning=self.config.end_of_reasoning,
-            ),
+            dataset=self.reward_predictor_datasets[split],
             batch_size=self.config.batch_size if split == "train" else 1,
             collate_fn=lambda x: x,
         )
@@ -280,6 +307,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 self.dataset.matcher,
                 existing_ids=set(self.test_result.keys()),
                 max_steps=self.config.max_steps,
+                max_depth=self.config.max_depth,
                 beam_size=self.config.beam_size,
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,

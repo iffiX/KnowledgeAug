@@ -183,6 +183,7 @@ class OpenBookQASampleTrainConfig(BaseModel):
     match_closest_when_no_equal: bool = True
 
     max_steps: int = 2
+    max_depth: int = 2
     beam_size: int = 10
     return_beam_num: int = 5
     min_logits: Union[float, None] = None
