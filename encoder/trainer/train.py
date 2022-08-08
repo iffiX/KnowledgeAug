@@ -4,15 +4,11 @@ import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
-from .commonsense_qa_search_trainer import CommonsenseQASearchTrainer
 from .commonsense_qa_trainer import CommonsenseQATrainer
 from .openbook_qa_trainer import OpenBookQATrainer
-from .openbook_qa_search_trainer import OpenBookQASearchTrainer
 from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
-from .openbook_qa_augment_compare_trainer import OpenBookQAAugmentCompareTrainer
 from .arc_trainer import ARCTrainer
-from .arc_search_trainer import ARCSearchTrainer
 from .ensemble_trainer import EnsembleTrainer
 from .test_distributed_trainer import TestDistributedTrainer
 from pytorch_lightning import seed_everything
@@ -22,15 +18,11 @@ from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
     "commonsense_qa": CommonsenseQATrainer,
-    "commonsense_qa_search": CommonsenseQASearchTrainer,
     "openbook_qa": OpenBookQATrainer,
-    "openbook_qa_search": OpenBookQASearchTrainer,
     "openbook_qa_sample": OpenBookQASampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
-    "openbook_qa_augment_compare": OpenBookQAAugmentCompareTrainer,
     "test_distributed": TestDistributedTrainer,
     "arc": ARCTrainer,
-    "arc_search": ARCSearchTrainer,
     "ensemble": EnsembleTrainer,
 }
 
@@ -174,10 +166,7 @@ def _train(
         callbacks=[checkpoint_callback, early_stopping],
         logger=[t_logger],
         reload_dataloaders_every_epoch=True
-        if isinstance(
-            stage_trainer,
-            (ARCSearchTrainer, OpenBookQASearchTrainer, OpenBookQASampleTrainer),
-        )
+        if isinstance(stage_trainer, (OpenBookQASampleTrainer),)
         else False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,

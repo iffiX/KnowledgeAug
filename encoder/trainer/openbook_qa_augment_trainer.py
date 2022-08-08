@@ -239,7 +239,7 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                 model.train()
                 # org_optim = self.optimizers().optimizer
                 # optim = type(org_optim)(
-                #     model.parameters(), lr=7e-6
+                #     model.parameters(), lr=5e-6
                 # )  # lr=org_optim.defaults["lr"])
                 # optim.load_state_dict(org_optim.state_dict())
 
@@ -259,11 +259,9 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                     )
                     most_similar_train_indices = t.topk(similarity, k=12).indices
                     for i in range(len(most_similar_train_indices)):
-                        if similarity[most_similar_train_indices[i]] < 0.60:
+                        if similarity[most_similar_train_indices[i]] < 0.58:
                             break
 
-                    # most_similar_train_indices = t.topk(similarity, k=8).indices
-                    # i = 8
                     for _ in range(2):
                         if i > 0:
                             most_similar_train_indices = most_similar_train_indices[:i]
@@ -425,7 +423,9 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                 if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
                     raw_paths = [
                         matcher.sub_paths_to_annotations(
-                            x, templates="natural", prioritize_original_annotation=True,
+                            x,
+                            templates="standard",
+                            prioritize_original_annotation=True,
                         )[0]
                         for x in raw_path_edges
                     ]
@@ -445,7 +445,7 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
             if len(raw_paths) > 0:
                 raw_paths = dataset.matcher.sub_paths_to_annotations(
                     raw_path_edges,
-                    templates="natural",
+                    templates="standard",
                     prioritize_original_annotation=True,
                 )
                 # only the first level (corresponds to sample config)
