@@ -62,6 +62,7 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
         self.dataset = OpenBookQAAugDataset(
             tokenizer=self.tokenizer,
             augment_contexts=self.load_augment_contexts(),
+            similarity_embeddings=self.load_similarity_embeddings(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in self.config.base_type else "splitted",
         )
@@ -78,7 +79,6 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
             model_configs = config.model_configs or {}
             self.model = Model(config.base_type, 4, **model_configs)
         self._real_device = None
-        self.similarity_embedding = None
 
     @property
     def monitor(self):
@@ -172,24 +172,8 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
         else:
             self._real_device = None
 
-        # if self.trainer.stage_mode == "validate":
-        #     # perform this step after model device is changed to accelerator
-        #     self.similarity_embedding = self.load_similarity_embedding()
-        #     # must use original train data for correspondence
-        #     self.dataset.train_data = self.dataset.original_train_data
-
-    def on_validation_start(self):
-        if self.trainer.stage_mode == "validate":
-            # perform this step after model device is changed to accelerator
-            self.similarity_embedding = self.load_similarity_embedding()
-            # must use original train data for correspondence
-            self.dataset.train_data = self.dataset.original_train_data
-
     # noinspection PyTypeChecker
     def training_step(self, batch: BatchEncoding, batch_idx):
-        # if self.trainer.stage_mode == "validate":
-        #     return None
-
         if "t5-" in self.config.base_type:
             # answer shape [batch_size, sequence_length]
             out = self.model(
@@ -225,80 +209,14 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                 "result": result,
             }
         else:
-            if self.trainer.stage_mode == "train":
-                return {
-                    "batch": batch.to("cpu"),
-                    "result": self.model.predict(
-                        input_ids=batch["sentence"].to(self.real_device),
-                        attention_mask=batch["mask"].to(self.real_device),
-                        token_type_ids=batch["type_ids"].to(self.real_device),
-                    ).to(device="cpu", dtype=t.float32),
-                }
-            else:
-                model = copy.deepcopy(self.model)
-                model.train()
-                # org_optim = self.optimizers().optimizer
-                # optim = type(org_optim)(
-                #     model.parameters(), lr=5e-6
-                # )  # lr=org_optim.defaults["lr"])
-                # optim.load_state_dict(org_optim.state_dict())
-
-                optim_cls = getattr(t.optim, self.config.optimizer_class)
-                optim = optim_cls(
-                    model.parameters(),
-                    lr=5e-6,
-                    weight_decay=self.config.l2_regularization,
-                )
-
-                # pytorch lightning disables grad during validation by default
-                with t.enable_grad():
-                    similarity = t.sum(
-                        self.similarity_embedding[2][batch["id"][0]]
-                        * self.similarity_embedding[1],
-                        dim=1,
-                    )
-                    most_similar_train_indices = t.topk(similarity, k=12).indices
-                    for i in range(len(most_similar_train_indices)):
-                        if similarity[most_similar_train_indices[i]] < 0.58:
-                            break
-
-                    for _ in range(2):
-                        if i > 0:
-                            most_similar_train_indices = most_similar_train_indices[:i]
-
-                            batch_size = 4
-                            for b in tqdm.tqdm(
-                                range(0, len(most_similar_train_indices), batch_size)
-                            ):
-                                train_batch = collate_function_dict_to_batch_encoding(
-                                    [
-                                        self.dataset.train_dataset[x]
-                                        for x in most_similar_train_indices[
-                                            b : b + batch_size
-                                        ]
-                                    ],
-                                ).to(self.real_device)
-                                optim.zero_grad()
-                                loss = (
-                                    model(
-                                        input_ids=train_batch["sentence"],
-                                        attention_mask=train_batch["mask"],
-                                        token_type_ids=train_batch["type_ids"],
-                                        labels=train_batch["label"],
-                                    ).loss
-                                    # / 4
-                                )
-                                loss.backward()
-                                optim.step()
-                model.eval()
-                return {
-                    "batch": batch.to("cpu"),
-                    "result": model.predict(
-                        input_ids=batch["sentence"].to(self.real_device),
-                        attention_mask=batch["mask"].to(self.real_device),
-                        token_type_ids=batch["type_ids"].to(self.real_device),
-                    ).to(device="cpu", dtype=t.float32),
-                }
+            return {
+                "batch": batch.to("cpu"),
+                "result": self.model.predict(
+                    input_ids=batch["sentence"].to(self.real_device),
+                    attention_mask=batch["mask"].to(self.real_device),
+                    token_type_ids=batch["type_ids"].to(self.real_device),
+                ).to(device="cpu", dtype=t.float32),
+            }
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -323,12 +241,6 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
                 print(f"Validation on {prefix} result:")
                 for key, value in metrics.items():
                     print(f"{prefix}_{key}: {value}")
-        # if (
-        #     self.trainer.stage_mode == "validate"
-        #     and (not self.is_distributed or get_rank() == 0)
-        #     and not self.trainer.sanity_checking
-        # ):
-        #     self.trainer.should_stop = True
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
         if "t5-" in self.config.base_type:
@@ -455,12 +367,12 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
 
         return contexts, train_contexts
 
-    def load_similarity_embedding(self):
+    def load_similarity_embeddings(self):
         with TorchCache(
             os.path.join(
                 preprocess_cache_dir, f"openbook_qa_sample_similarity_embedding.pt"
             ),
-            generate_func=self.generate_similarity_embedding,
+            generate_func=self.generate_similarity_embeddings,
         ) as cache:
             return cache.data
 
@@ -477,7 +389,7 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
             train_paths[d["id"]] = (result[0], result[1])
         return train_paths
 
-    def generate_similarity_embedding(self):
+    def generate_similarity_embeddings(self):
         dataset = OpenBookQADataset(tokenizer=None)
         model_name = "sentence-transformers/all-mpnet-base-v2"
         batch_size = 32
@@ -494,7 +406,7 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
             proxies=proxies,
             mirror=huggingface_mirror,
             local_files_only=local_files_only,
-        ).to(self.real_device)
+        )
         texts = []
         ids = []
         for d in (
@@ -502,31 +414,29 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
             + dataset.original_validate_data
             + dataset.original_test_data
         ):
-            # texts.append(d["text_question"] + " " + d["text_choices"])
             texts.append(d["text_question"])
+            # texts.append(d["text_question"] + " " + d["text_choices"])
             ids.append(d["id"])
 
         sub_embedding_list = []
-        for b in tqdm.tqdm(range(0, len(texts), batch_size)):
-            batch = tokenizer(
-                texts[b : b + batch_size],
-                padding="longest",
-                truncation=True,
-                return_tensors="pt",
-            ).to(self.real_device)
-            sub_embedding_list.append(
-                self.mean_pooling(model(**batch)[0], batch["attention_mask"])
-            )
+        with t.no_grad():
+            for b in tqdm.tqdm(range(0, len(texts), batch_size)):
+                batch = tokenizer(
+                    texts[b : b + batch_size],
+                    padding="longest",
+                    truncation=True,
+                    return_tensors="pt",
+                )
+                sub_embedding_list.append(
+                    self.mean_pooling(model(**batch)[0], batch["attention_mask"])
+                )
         e = t.cat(sub_embedding_list)
-        e = F.normalize(e, p=2, dim=1).to("cpu")
+        e = F.normalize(e, p=2, dim=1)
         train_size = len(dataset.original_train_data)
         return (
             ids[:train_size],
             e[:train_size],
-            {
-                data_id: data_h.unsqueeze(0)
-                for data_id, data_h in zip(ids[train_size:], e[train_size:])
-            },
+            {data_id: data_h.unsqueeze(0) for data_id, data_h in zip(ids, e)},
         )
 
     def mean_pooling(self, token_embeddings, attention_mask):
