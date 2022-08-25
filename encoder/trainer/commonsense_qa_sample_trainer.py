@@ -18,20 +18,22 @@ from transformers import BatchEncoding
 from sklearn.metrics import accuracy_score, f1_score
 from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
-from encoder.dataset.openbook_qa import OpenBookQADataset
+from encoder.dataset.commonsense_qa import CommonsenseQABaseDataset
+from encoder.prompter.commonsense_qa import CommonsenseQAPrompter
 from encoder.dataset.sample import (
     RewardPredictorDataset,
     RewardPredictorBestFirstBeamSearchDataset,
 )
-from encoder.utils.config import OpenBookQASampleTrainConfig, fix_missing
+
+from encoder.utils.config import CommonsenseQASampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.adafactor import Adafactor
 
 
-class OpenBookQASampleTrainer(pl.LightningModule):
+class CommonsenseQASampleTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: OpenBookQASampleTrainConfig,
+        config: CommonsenseQASampleTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -39,38 +41,44 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
         fix_missing(config)
+
+        if not os.path.exists(config.initial_weight_path):
+            raise ValueError(
+                f"Initial weight path: {config.initial_weight_path} is invalid"
+            )
         self.config = config
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
-        self.dataset = OpenBookQADataset(
-            tokenizer=None,
-            max_seq_length=config.max_seq_length,
-            use_matcher=config.use_matcher,
-            matcher_mode=config.matcher_mode,
-            matcher_seed=config.seed,
-            matcher_config=config.matcher_config,
-            match_closest_when_no_equal=config.match_closest_when_no_equal,
-            output_mode="single" if "t5-" in self.config.base_type else "splitted",
+        self.dataset = CommonsenseQABaseDataset(tokenizer=None,)
+        self.prompter = CommonsenseQAPrompter(self.dataset)
+        # Add facts used by authoritative reasoning paths
+        self.dataset.matcher.add_question_specific_knowledge(
+            self.prompter.get_all_authoritative_facts()
         )
+
+        self.unmodified_dataset = CommonsenseQABaseDataset(tokenizer=None,)
+
         self.reward_predictor = RewardPredictor(
             config.base_type,
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
+        self.reward_predictor.load_state_dict(t.load(config.initial_weight_path))
+
         self.reward_predictor_datasets = {
             split: RewardPredictorDataset(
-                f"openbook_qa_{split}",
+                f"commonsense_qa_{split}",
                 [
                     (
                         d["text_question"],
-                        d["text_choices"],
+                        ", ".join(d["choices"]),
                         d["text_answer"],
-                        d["original_facts"],
+                        self.prompter.get_authoritative_reasoning_of_id(d["id"])[0],
                     )
-                    for d in getattr(self.dataset, f"original_{split}_data")
+                    for d in getattr(self.dataset, f"{split}_data")
+                    if self.prompter.is_authoritative_reasoning_of_id_available(d["id"])
                 ],
                 self.dataset.matcher,
-                limit_size=limit_size,
                 max_depth=self.config.max_depth,
                 negative_samples=self.config.negative_samples
                 if split == "train"
@@ -80,33 +88,28 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 else self.config.negative_shuffle_seed + get_rank(),
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                limit_size=100 if split == "validate" else None,
             )
-            for split, limit_size in (("train", None), ("validate", 1), ("test", 100))
+            for split in ("train", "validate")
         }
         self.test_result = {}
 
     @property
     def monitor(self):
-        return "test_is_right_max_accuracy"
+        return "is_right_max_accuracy"
 
     @property
     def monitor_mode(self):
         return "max"
 
-    def export_model(self):
-        return self.reward_predictor
-
     def train_dataloader(self):
         return self.create_sample_dataloader("train")
 
     def val_dataloader(self):
-        return [
-            self.create_sample_dataloader("validate"),
-            self.create_sample_dataloader("test"),
-        ]
+        return self.create_sample_dataloader("validate")
 
     def test_dataloader(self):
-        path = os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json")
+        path = os.path.join(preprocess_cache_dir, "commonsense_qa_sample_result.json")
         if os.path.exists(path):
             with open(path, "r",) as file:
                 self.test_result.update(json.load(file))
@@ -131,15 +134,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
         return loss
 
     # noinspection PyTypeChecker
-    def validation_step(self, batch, batch_idx, _dataloader_idx):
-        # if self.current_epoch < 4:
-        #     return {
-        #         "accuracy": 0.01 * self.current_epoch,
-        #         "f1": 0.01 * self.current_epoch,
-        #         "is_right_max": 0.01 * self.current_epoch,
-        #     }
-        # else:
-
+    def validation_step(self, batch, batch_idx):
         state, action, wrong_actions = batch[0]
         states = [state] * (1 + len(wrong_actions))
         actions = [action] + wrong_actions
@@ -175,39 +170,33 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             self.validate_on_every_process(outputs)
 
     def validate_on_every_process(self, outputs):
-        for prefix, dataloader_idx in (("val", 0), ("test", 1)):
-            existing_idx = set()
-            filtered_outputs = []
-            for o in outputs[dataloader_idx]:
-                if o["idx"] not in existing_idx:
-                    filtered_outputs.append(o)
-                    existing_idx.add(o["idx"])
-            outputs[dataloader_idx] = filtered_outputs
+        existing_idx = set()
+        filtered_outputs = []
+        for o in outputs:
+            if o["idx"] not in existing_idx:
+                filtered_outputs.append(o)
+                existing_idx.add(o["idx"])
 
-            average_accuracy = float(
-                np.mean([o["accuracy"] for o in outputs[dataloader_idx]])
-            )
-            average_f1 = float(np.mean([o["f1"] for o in outputs[dataloader_idx]]))
-            average_is_right_max_accuracy = float(
-                np.mean([o["is_right_max"] for o in outputs[dataloader_idx]])
-            )
-            self.log(
-                f"{prefix}_accuracy", average_accuracy, prog_bar=True, sync_dist=True,
-            )
-            self.log(f"{prefix}_f1", average_f1, prog_bar=True, sync_dist=True)
-            self.log(
-                f"{prefix}_is_right_max_accuracy",
-                average_is_right_max_accuracy,
-                prog_bar=True,
-                sync_dist=True,
-            )
-            if not self.is_distributed or get_rank() == 0:
-                print(f"Validation on {prefix} result:")
-                print(f"{prefix}_accuracy: {average_accuracy}")
-                print(f"{prefix}_f1: {average_f1}")
-                print(
-                    f"{prefix}_is_right_max_accuracy: {average_is_right_max_accuracy}"
-                )
+        average_accuracy = float(np.mean([o["accuracy"] for o in filtered_outputs]))
+        average_f1 = float(np.mean([o["f1"] for o in filtered_outputs]))
+        average_is_right_max_accuracy = float(
+            np.mean([o["is_right_max"] for o in filtered_outputs])
+        )
+        self.log(
+            f"accuracy", average_accuracy, prog_bar=True, sync_dist=True,
+        )
+        self.log(f"f1", average_f1, prog_bar=True, sync_dist=True)
+        self.log(
+            f"is_right_max_accuracy",
+            average_is_right_max_accuracy,
+            prog_bar=True,
+            sync_dist=True,
+        )
+        if not self.is_distributed or get_rank() == 0:
+            print(f"Validation result:")
+            print(f"accuracy: {average_accuracy}")
+            print(f"f1: {average_f1}")
+            print(f"is_right_max_accuracy: {average_is_right_max_accuracy}")
 
     # def on_test_start(self) -> None:
     #     # print(f"Rank: {get_rank()}, min_logits={self.config.min_logits}")
@@ -242,7 +231,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
             for id, paths, path_edges in sorted_outputs:
                 result[id] = (paths, path_edges)
             with open(
-                os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json"),
+                os.path.join(preprocess_cache_dir, "commonsense_qa_sample_result.json"),
                 "w",
             ) as file:
                 json.dump(result, file)
@@ -304,10 +293,10 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 # ][:2],
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
-                    for d in getattr(self.dataset, f"original_{split}_data")
+                    for d in getattr(self.unmodified_dataset, f"{split}_data")
                 ],
                 self.reward_predictor,
-                self.dataset.matcher,
+                self.unmodified_dataset.matcher,
                 existing_ids=set(self.test_result.keys()),
                 max_steps=self.config.max_steps,
                 max_depth=self.config.max_depth,

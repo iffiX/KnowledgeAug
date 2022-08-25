@@ -5,7 +5,7 @@ import logging
 import argparse
 import subprocess
 from multiprocessing import get_context
-from encoder.trainer.train import run
+from encoder.trainer.train import run, export_model
 from encoder.utils.config import *
 
 logging.root.setLevel(logging.INFO)
@@ -24,6 +24,10 @@ if __name__ == "__main__":
         "evaluate_model", help="Start evaluating model."
     )
 
+    p_export_model = subparsers.add_parser(
+        "export_model", help="Start exporting model."
+    )
+
     p_train.add_argument(
         "--config", type=str, required=True, help="Path of the config file.",
     )
@@ -54,6 +58,18 @@ if __name__ == "__main__":
 
     p_evaluate_model.add_argument(
         "--stage", type=int, default=None, help="Stage number to run.",
+    )
+
+    p_export_model.add_argument(
+        "--config", type=str, required=True, help="Path of the config file.",
+    )
+
+    p_export_model.add_argument(
+        "--stage", type=int, default=None, help="Stage number to run.",
+    )
+
+    p_export_model.add_argument(
+        "--path", type=str, default=None, help="Save destination.",
     )
 
     p_generate = subparsers.add_parser(
@@ -110,6 +126,11 @@ if __name__ == "__main__":
                 0 <= args.stage < len(config.stages)
             ), f"Stage number {args.stage} out of range."
             run(config, args.stage, mode=args.command)
-
+    elif args.command == "export_model":
+        config = load_config(args.config)
+        assert len(config.stages) == len(
+            config.configs
+        ), "Pipeline stage number must be equal to the number of stage configs."
+        export_model(config, args.stage, args.path)
     elif args.command == "generate":
         generate_config(args.stages.split(","), args.output, args.print)

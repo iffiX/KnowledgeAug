@@ -141,6 +141,70 @@ class OpenBookQAAugmentTrainConfig(BaseModel):
     load_prefetch_per_worker: Optional[int] = 2
 
 
+class CommonsenseQASampleTrainConfig(BaseModel):
+    load: bool = False
+    seed: int = 0
+    save: bool = True
+    save_last: bool = False
+    epochs: int = 5
+    train_steps: Optional[int] = None
+    validate_steps: Optional[int] = None
+    batch_size: int = 1
+    accumulate_grad_batches: int = 1
+
+    optimizer_class: str = "Adam"
+    learning_rate: float = 5e-5
+    l2_regularization: float = 0
+    scheduler_warmup_proportion: float = 0
+    scheduler_cycles: int = 1
+
+    base_type: str = "microsoft/deberta-v3-base"
+    initial_weight_path: str = ""
+    pad_by_longest: bool = True
+    max_seq_length: Union[int, None] = None
+    inference_batch_size: int = 128
+
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+    max_steps: int = 2
+    max_depth: int = 2
+    beam_size: int = 10
+    return_beam_num: int = 5
+    min_logits: Union[float, None] = None
+    max_inference_num: int = 20000
+    state_delimeter: str = ", "
+    end_of_reasoning: str = "END_OF_REASONING"
+    negative_samples: int = 31
+    negative_shuffle_seed: int = 42
+
+
+class CommonsenseQAAugmentTrainConfig(BaseModel):
+    load: bool = False
+    seed: int = 42
+    save: bool = True
+    save_last: bool = False
+    epochs: int = 20
+    train_steps: Optional[int] = None
+    validate_steps: Optional[int] = None
+    batch_size: int = 16
+    accumulate_grad_batches: int = 1
+
+    optimizer_class: str = "AdamW"
+    learning_rate: float = 5e-6
+    l2_regularization: float = 0
+    scheduler_warmup_proportion: float = 0
+    scheduler_cycles: int = 1
+
+    base_type: str = "microsoft/deberta-v3-large"
+    model_configs: Optional[dict] = None
+    max_seq_length: int = 256
+    generate_length: int = 20
+    device_map: Optional[Dict[int, List[int]]] = None
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+
 class ARCTrainConfig(BaseModel):
     load: bool = False
     seed: int = 0
@@ -215,10 +279,10 @@ class Config(BaseModel):
     configs: List[
         Union[
             CommonsenseQATrainConfig,
+            CommonsenseQASampleTrainConfig,
             OpenBookQATrainConfig,
             OpenBookQASampleTrainConfig,
             OpenBookQAAugmentTrainConfig,
-            ARCTrainConfig,
             EnsembleTrainConfig,
         ]
     ] = []
@@ -227,10 +291,11 @@ class Config(BaseModel):
 def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
         "commonsense_qa": CommonsenseQATrainConfig,
+        "commonsense_qa_sample": CommonsenseQASampleTrainConfig,
+        "commonsense_qa_augment": CommonsenseQAAugmentTrainConfig,
         "openbook_qa": OpenBookQATrainConfig,
         "openbook_qa_sample": OpenBookQASampleTrainConfig,
         "openbook_qa_augment": OpenBookQAAugmentTrainConfig,
-        "arc": ARCTrainConfig,
         "ensemble": EnsembleTrainConfig,
         "test_distributed": TestDistributedTrainConfig,
     }

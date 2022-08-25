@@ -24,7 +24,7 @@ from encoder.utils.settings import (
     local_files_only,
 )
 from encoder.utils.file import open_file_with_create_directories
-from .utils import num2word
+from .utils import num2word, normalize_t5_input
 from .base import StaticIterableDataset
 
 
@@ -116,7 +116,7 @@ class OpenBookQADataset:
             if self.use_matcher:
                 annotation = self.generate_t5_annotation(data, quiet=True)
                 encoded_sentence = self.tokenizer(
-                    self.normalize_t5_input(
+                    normalize_t5_input(
                         data["text_question"]
                         + " \\n "
                         + data["text_choices"].replace("\n", " ")
@@ -131,7 +131,7 @@ class OpenBookQADataset:
                 data["mask"] = encoded_sentence.attention_mask
             else:
                 encoded_sentence = self.tokenizer(
-                    self.normalize_t5_input(
+                    normalize_t5_input(
                         data["text_question"]
                         + " \\n "
                         + data["text_choices"].replace("\n", " ")
@@ -144,7 +144,7 @@ class OpenBookQADataset:
                 data["sentence"] = encoded_sentence.input_ids
                 data["mask"] = encoded_sentence.attention_mask
             answer = self.tokenizer.encode(
-                self.normalize_t5_input(data["text_answer"]),
+                normalize_t5_input(data["text_answer"]),
                 padding="max_length",
                 max_length=16,
                 truncation=True,
@@ -463,23 +463,17 @@ class OpenBookQADataset:
                 data
             )
         return {
-            "inputs": OpenBookQADataset.normalize_t5_input(
+            "inputs": normalize_t5_input(
                 data["text_question"]
                 + " \\n "
                 + data["text_choices"].replace("\n", " ")
                 + annotation
             ),
-            "targets": OpenBookQADataset.normalize_t5_input(data["text_answer"]),
+            "targets": normalize_t5_input(data["text_answer"]),
             "choices": data["choices"],
             "label": data["label"],
             "id": data["id"],
         }
-
-    @staticmethod
-    def normalize_t5_input(text):
-        text = text.lower()
-        text = re.sub(r"'(.*)'", r"\1", text)
-        return text
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
         """

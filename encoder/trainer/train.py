@@ -4,7 +4,8 @@ import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
-from .commonsense_qa_trainer import CommonsenseQATrainer
+from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
+from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
@@ -17,7 +18,8 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
-    "commonsense_qa": CommonsenseQATrainer,
+    "commonsense_qa_sample": CommonsenseQASampleTrainer,
+    "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_sample": OpenBookQASampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
@@ -321,3 +323,23 @@ def run(config: Config, stage_index: int, mode: str = "train"):
             print(out)
     else:
         raise ValueError(f"Unknown mode {mode}")
+
+
+def export_model(config: Config, stage_index: int, path: str):
+    logging.info("Exporting model state dict.")
+
+    # execute stages
+    stage = config.stages[stage_index]
+    checkpoint_path = os.path.join(
+        config.working_directory, str(stage_index), "checkpoint"
+    )
+
+    checkpoint = find_checkpoint(checkpoint_path)
+    if checkpoint is None:
+        raise RuntimeError("Cannot find a valid checkpoint.")
+    else:
+        logging.info(f"Using checkpoint {checkpoint}")
+
+    stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
+    state_dict = stage_trainer.export_model().state_dict()
+    t.save({k: v.cpu() for k, v in state_dict.items()}, path)

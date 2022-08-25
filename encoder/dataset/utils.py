@@ -167,3 +167,9 @@ class Translator(nn.Module):
         back_translated_texts = self.translate(translated_texts, language="en")
 
         return back_translated_texts
+
+
+def normalize_t5_input(text):
+    text = text.lower()
+    text = re.sub(r"'(.*)'", r"\1", text)
+    return text

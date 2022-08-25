@@ -6,6 +6,7 @@ import pathlib
 import gzip
 import zipfile
 import shutil
+import logging
 import requests
 import torch
 from tqdm.auto import tqdm
@@ -74,7 +75,7 @@ class SafeCacheBase:
         data = self.load(self.path, self.validate_func)
         if data is None:
             data = self.generate_func(*self.generate_args, **self.generate_kwargs)
-            self._is_data_updated = True
+            self.save(data, self.path)
         self._data = data
         return self
 
@@ -131,6 +132,63 @@ class JSONCache(SafeCacheBase):
     def save(self, data, path):
         with open(path, "w") as file:
             json.dump(data, file, indent=2)
+
+
+class JSONStreamCache(SafeCacheBase):
+    def __init__(self, path, generate_ids, generate_from_id_func, validate_func=None):
+        self.path = path
+        self.generate_ids = set(generate_ids)
+        self.generate_from_id_func = generate_from_id_func
+        self.generated_partial_data = {}
+        super(JSONStreamCache, self).__init__(
+            path=path, generate_func=self.stream_generate, validate_func=validate_func
+        )
+
+    def stream_generate(self):
+        with open(self.path, "a", buffering=1 << 20, encoding="utf-8") as f:
+            for id_ in tqdm(
+                list(
+                    self.generate_ids.difference(
+                        set(self.generated_partial_data.keys())
+                    )
+                )
+            ):
+                generated_data = self.generate_from_id_func(id_)
+                f.write(
+                    json.dumps({"id": id_, "data": generated_data}, ensure_ascii=False,)
+                    + "\n"
+                )
+                self.generated_partial_data[id_] = generated_data
+        full_data, self.generated_partial_data = self.generated_partial_data, {}
+        return full_data
+
+    def load(self, path, validate_func):
+        # if all data are generated, return full data,
+        # otherwise set partially generated data and return None
+        if os.path.exists(path):
+            with open(path, "r") as f:
+                generated_raw_data = f.read()
+            results = [
+                json.loads(line)
+                for line in generated_raw_data.splitlines()
+                if line.strip()
+            ]
+            generated_data = {r["id"]: r["data"] for r in results}
+            processed_ids = {r["id"] for r in results}
+
+            remain_num = len(self.generate_ids.difference(set(generated_data.keys())))
+            logging.info(
+                f"Loaded {len(generated_data)} generated data, "
+                f"remaining {remain_num}/{len(self.generate_ids)} to generate."
+            )
+
+            if self.generate_ids == processed_ids:
+                if validate_func(generated_data):
+                    return generated_data
+            else:
+                self.generated_partial_data = generated_data
+
+        return None
 
 
 class PickleCache(SafeCacheBase):

@@ -1,20 +1,28 @@
 import re
 import os
-import json
+import copy
+import random
 import logging
+import datasets
+from tqdm import tqdm
+from typing import List
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.download import ConceptNet, CommonsenseQA
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
-from encoder.utils.settings import preprocess_cache_dir
+from encoder.utils.file import PickleCache
+from encoder.utils.settings import preprocess_cache_dir, dataset_cache_dir
 
 
 class CommonsenseQAMatcher(BaseMatcher):
     def __init__(
-        self, tokenizer: PreTrainedTokenizerBase, for_question_annotation=False
+        self, tokenizer: PreTrainedTokenizerBase,
     ):
         archive_path = str(
             os.path.join(preprocess_cache_dir, "conceptnet-archive.data")
+        )
+        embedding_path = str(
+            os.path.join(preprocess_cache_dir, "conceptnet-embedding-glove.hdf5")
         )
         self.concept_net = ConceptNet().require()
         self.commonsense_qa = CommonsenseQA().require()
@@ -23,8 +31,9 @@ class CommonsenseQAMatcher(BaseMatcher):
             logging.info("Processing concept net")
             reader = ConceptNetReader().read(
                 asserion_path=self.concept_net.assertion_path,
-                weight_path=self.concept_net.numberbatch_path,
-                weight_hdf5_path=self.concept_net.embedding_path,
+                weight_path=self.concept_net.glove_path,
+                weight_style="glove_42b_300d",
+                weight_hdf5_path=embedding_path,
                 simplify_with_int8=True,
             )
             reader.tokenized_nodes = tokenizer(
@@ -45,101 +54,88 @@ class CommonsenseQAMatcher(BaseMatcher):
             matcher.save(archive_path)
         else:
             matcher = KnowledgeMatcher(archive_path)
-        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
 
-        if not for_question_annotation:
-            # Disable relations of similar word forms
-            matcher.kb.disable_edges_of_relationships(
-                [
-                    "DerivedFrom",
-                    "EtymologicallyDerivedFrom",
-                    "EtymologicallyRelatedTo",
-                    "RelatedTo",
-                    "FormOf",
-                ]
-            )
-        else:
-            matcher.kb.disable_edges_of_relationships(
-                [
-                    "DerivedFrom",
-                    "EtymologicallyDerivedFrom",
-                    "EtymologicallyRelatedTo",
-                    "RelatedTo",
-                    "FormOf",
-                    "DefinedAs",
-                    # "IsA",
-                    # "MannerOf",
-                ]
-            )
+        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
         self.matcher.kb.disable_edges_with_weight_below(1)
-        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
 
-        if not for_question_annotation:
-            self.add_commonsense_qa_dataset()
-            # self.add_wordnet_definition()
-            # self.add_openbook_qa_knowledge()
-            # self.add_generics_kb()
+        self.add_generics_kb()
+        # self.add_openbook_qa_knowledge()
 
-    def add_commonsense_qa_dataset(self):
-        logging.info("Adding Commonsense QA dataset")
-        count = 0
-        for dataset_path in (
-            self.commonsense_qa.train_path,
-            # self.commonsense_qa.validate_path,
-        ):
-            with open(dataset_path, "r") as file:
-                for line in file:
-                    sample = json.loads(line)
-                    correct_choice = [
-                        c["text"]
-                        for c in sample["question"]["choices"]
-                        if c["label"] == sample["answerKey"]
-                    ][0]
-                    line = sample["question"]["stem"] + " " + correct_choice
-                    if line.count(".") >= 3:
-                        continue
-                    count += 1
-                    ids, mask = self.tokenize_and_mask(line)
-                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-        logging.info(f"Added {count} composite nodes")
+    def add_question_specific_knowledge(self, question_specific_knowledge: List[str]):
+        logging.info("Adding question specific knowledge")
+        added = set()
+        for knowledge in question_specific_knowledge:
+            knowledge = (
+                knowledge.strip(".")
+                .replace("(", ",")
+                .replace(")", ",")
+                .replace(";", ",")
+                .replace('"', " ")
+                .lower()
+            )
+            if knowledge not in added:
+                added.add(knowledge)
+                ids, mask = self.tokenize_and_mask(knowledge)
+                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+        logging.info(f"Added {len(added)} composite nodes")
 
-    # def add_generics_kb(self):
-    #     logging.info("Adding generics kb")
-    #     path = str(os.path.join(dataset_cache_dir, "generics_kb"))
-    #     os.makedirs(path, exist_ok=True)
-    #     if not os.path.exists(os.path.join(path, "GenericsKB-Best.tsv")):
-    #         logging.info("Skipping loading generics_kb because file is not loaded")
-    #         logging.info(
-    #             f"Please download GenericsKB-Best.tsv "
-    #             f"from https://drive.google.com/drive/folders/1vqfVXhJXJWuiiXbUa4rZjOgQoJvwZUoT "
-    #             f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
-    #         )
-    #     gkb = datasets.load_dataset("generics_kb", "generics_kb_best", data_dir=path,)
-    #     added = set()
-    #     for entry in gkb["train"]:
-    #         if (
-    #             "ConceptNet" in entry["source"]
-    #             or "WordNet" in entry["source"]
-    #             or entry["generic_sentence"].count(" ") < 3
-    #         ):
-    #             continue
-    #         knowledge = (
-    #             entry["generic_sentence"]
-    #             .strip(".")
-    #             .replace("(", ",")
-    #             .replace(")", ",")
-    #             .replace(";", ",")
-    #             .replace('"', " ")
-    #             .lower()
-    #         )
-    #         if knowledge not in added:
-    #             added.add(knowledge)
-    #             self.matcher.kb.add_composite_node(
-    #                 knowledge,
-    #                 "RelatedTo",
-    #                 self.tokenizer.encode(knowledge, add_special_tokens=False),
-    #             )
-    #     logging.info(f"Added {len(added)} composite nodes")
+    def add_generics_kb(self):
+        logging.info("Adding generics kb")
+        path = str(os.path.join(dataset_cache_dir, "generics_kb"))
+        if not os.path.exists(os.path.dirname(path)):
+            os.makedirs(path, exist_ok=True)
+        if not os.path.exists(
+            os.path.join(path, "GenericsKB-Best.tsv")
+        ) and not os.path.isfile(path):
+            logging.info("Skipping loading generics_kb because file is not loaded")
+            logging.info(
+                f"Please download GenericsKB-Best.tsv "
+                f"from https://drive.google.com/drive/folders/1vqfVXhJXJWuiiXbUa4rZjOgQoJvwZUoT "
+                f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
+            )
+            return
+        gkb = datasets.load_dataset("generics_kb", "generics_kb_best", data_dir=path,)
+
+        def generate():
+            added = set()
+            result = []
+            logging.info(f"Preprocessing generics_kb")
+            for entry in tqdm(gkb["train"]):
+                if (
+                    "ConceptNet" in entry["source"]
+                    or "WordNet" in entry["source"]
+                    or "TupleKB" in entry["source"]
+                    or entry["generic_sentence"].count(" ") < 3
+                ):
+                    continue
+                knowledge = (
+                    entry["generic_sentence"]
+                    .strip(".")
+                    .replace("(", ",")
+                    .replace(")", ",")
+                    .replace(";", ",")
+                    .replace('"', " ")
+                    .lower()
+                )
+                if knowledge not in added:
+                    added.add(knowledge)
+                    ids, mask = self.tokenize_and_mask(knowledge)
+                    result.append((knowledge, ids, mask))
+            return result
+
+        with PickleCache(
+            os.path.join(
+                preprocess_cache_dir, "commonsense_qa_generics_kb_knowledge.data"
+            ),
+            generate_func=generate,
+        ) as cache:
+            rand = random.Random(42)
+            to_be_added = copy.deepcopy(cache.data)
+            rand.shuffle(to_be_added)
+            to_be_added = to_be_added[:100000]
+            for knowledge, ids, mask in tqdm(to_be_added):
+                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
+            logging.info(f"Added {len(to_be_added)} composite nodes")
 
     # def add_openbook_qa_knowledge(self):
     #     logging.info("Adding OpenBook QA knowledge")
@@ -174,4 +170,7 @@ class CommonsenseQAMatcher(BaseMatcher):
     #
 
     def __reduce__(self):
-        return CommonsenseQAMatcher, (self.tokenizer,)
+        return (
+            CommonsenseQAMatcher,
+            (self.tokenizer,),
+        )

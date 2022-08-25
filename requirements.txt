@@ -24,3 +24,4 @@ clean-text[gpl,sklearn]
 periodictable
 chemparse
 sklearn
+openai
