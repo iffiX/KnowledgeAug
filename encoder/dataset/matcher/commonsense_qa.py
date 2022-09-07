@@ -1,6 +1,7 @@
 import re
 import os
 import copy
+import json
 import random
 import logging
 import datasets
@@ -59,6 +60,7 @@ class CommonsenseQAMatcher(BaseMatcher):
         self.matcher.kb.disable_edges_with_weight_below(1)
 
         self.add_generics_kb()
+        self.add_commonsense_qa_dataset()
         # self.add_openbook_qa_knowledge()
 
     def add_question_specific_knowledge(self, question_specific_knowledge: List[str]):
@@ -79,6 +81,29 @@ class CommonsenseQAMatcher(BaseMatcher):
                 self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
         logging.info(f"Added {len(added)} composite nodes")
 
+    def add_commonsense_qa_dataset(self):
+        logging.info("Adding Commonsense QA dataset")
+        count = 0
+        for dataset_path in (
+            self.commonsense_qa.train_path,
+            # self.commonsense_qa.validate_path,
+        ):
+            with open(dataset_path, "r") as file:
+                for line in file:
+                    sample = json.loads(line)
+                    correct_choice = [
+                        c["text"]
+                        for c in sample["question"]["choices"]
+                        if c["label"] == sample["answerKey"]
+                    ][0]
+                    line = sample["question"]["stem"] + " " + correct_choice
+                    if line.count(".") >= 3:
+                        continue
+                    count += 1
+                    ids, mask = self.tokenize_and_mask(line)
+                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
+        logging.info(f"Added {count} composite nodes")
+
     def add_generics_kb(self):
         logging.info("Adding generics kb")
         path = str(os.path.join(dataset_cache_dir, "generics_kb"))
@@ -94,12 +119,13 @@ class CommonsenseQAMatcher(BaseMatcher):
                 f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
             )
             return
-        gkb = datasets.load_dataset("generics_kb", "generics_kb_best", data_dir=path,)
 
         def generate():
             added = set()
-            result = []
             logging.info(f"Preprocessing generics_kb")
+            gkb = datasets.load_dataset(
+                "generics_kb", "generics_kb_best", data_dir=path,
+            )
             for entry in tqdm(gkb["train"]):
                 if (
                     "ConceptNet" in entry["source"]
@@ -119,8 +145,13 @@ class CommonsenseQAMatcher(BaseMatcher):
                 )
                 if knowledge not in added:
                     added.add(knowledge)
-                    ids, mask = self.tokenize_and_mask(knowledge)
-                    result.append((knowledge, ids, mask))
+            added = list(added)
+            result = [
+                (knowledge, ids, mask)
+                for knowledge, (ids, mask) in zip(
+                    added, self.parallel_tokenize_and_mask(added)
+                )
+            ]
             return result
 
         with PickleCache(
@@ -129,10 +160,11 @@ class CommonsenseQAMatcher(BaseMatcher):
             ),
             generate_func=generate,
         ) as cache:
-            rand = random.Random(42)
+            # rand = random.Random(42)
+            # to_be_added = copy.deepcopy(cache.data)
+            # rand.shuffle(to_be_added)
+            # to_be_added = to_be_added[:100000]
             to_be_added = copy.deepcopy(cache.data)
-            rand.shuffle(to_be_added)
-            to_be_added = to_be_added[:100000]
             for knowledge, ids, mask in tqdm(to_be_added):
                 self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
             logging.info(f"Added {len(to_be_added)} composite nodes")

@@ -1,4 +1,5 @@
 import os
+import copy
 import json
 import itertools
 import warnings
@@ -6,6 +7,7 @@ import numpy as np
 import torch as t
 import torch.nn as nn
 import pytorch_lightning as pl
+from tqdm import tqdm
 from typing import List, Tuple
 from torch.utils.data import DataLoader
 from torch.distributed import (
@@ -18,23 +20,20 @@ from transformers import BatchEncoding
 from sklearn.metrics import accuracy_score, f1_score
 from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
-from encoder.dataset.commonsense_qa import CommonsenseQABaseDataset
-from encoder.prompter.commonsense_qa import CommonsenseQAPrompter
+from encoder.dataset.qasc import QASCBaseDataset
 from encoder.dataset.sample import (
     RewardPredictorDataset,
-    RewardPredictorDatasetCreatorWithFilter,
     RewardPredictorBestFirstBeamSearchDatasetWithFilter,
 )
-
-from encoder.utils.config import CommonsenseQASampleTrainConfig, fix_missing
+from encoder.utils.config import QASCSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.adafactor import Adafactor
 
 
-class CommonsenseQASampleTrainer(pl.LightningModule):
+class QASCSampleTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: CommonsenseQASampleTrainConfig,
+        config: QASCSampleTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -42,20 +41,20 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
         fix_missing(config)
-
-        if not os.path.exists(config.initial_weight_path):
-            raise ValueError(
-                f"Initial weight path: {config.initial_weight_path} is invalid"
-            )
         self.config = config
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
-        self.dataset = CommonsenseQABaseDataset(tokenizer=None,)
-        self.prompter = CommonsenseQAPrompter(self.dataset)
-        # Add facts used by authoritative reasoning paths
-        self.dataset.matcher.add_question_specific_knowledge(
-            self.prompter.get_all_authoritative_facts()
+        self.dataset = QASCBaseDataset(tokenizer=None)
+        self.reward_predictor = RewardPredictor(
+            config.base_type,
+            pad_by_longest=config.pad_by_longest,
+            max_length=config.max_seq_length,
         )
+
+        matcher = copy.deepcopy(self.dataset.matcher)
+        self.dataset.matcher.add_qasc_facts(train_and_validate=False)
+        matcher.add_qasc_facts(train_and_validate=True)
+
         # # Estimate filter bound
         # filter_bound_sum = 0
         # filter_bound_sum_l2 = 0
@@ -63,54 +62,35 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
         # filter_bound_num_l2 = 0
         # filter_bound_range = [1, 0]
         # filter_bound_range_l2 = [1, 0]
-        # for data in self.dataset.train_data:
-        #     if self.prompter.is_authoritative_reasoning_of_id_available(data["id"]):
-        #         _, target_nodes = self.dataset.matcher.match_source_and_target_nodes(
-        #             "", data["text_question"]
-        #         )
-        #         nodes = self.dataset.matcher.matcher.kb.find_nodes(
-        #             [
-        #                 (
-        #                     knowledge.strip(".")
-        #                     .replace("(", ",")
-        #                     .replace(")", ",")
-        #                     .replace(";", ",")
-        #                     .replace('"', " ")
-        #                     .lower()
-        #                 )
-        #                 for knowledge in self.prompter.get_authoritative_reasoning_of_id(
-        #                     data["id"]
-        #                 )[
-        #                     0
-        #                 ]
-        #             ]
-        #         )
-        #         filter_bound_num += 1
-        #         score = self.dataset.matcher.matcher.compute_f_beta_score(
-        #             nodes[0], target_nodes, beta=2
-        #         )
-        #         filter_bound_sum += score
-        #         filter_bound_range = [
-        #             min(filter_bound_range[0], score),
-        #             max(filter_bound_range[1], score),
-        #         ]
+        # for data in tqdm(self.dataset.train_data):
+        #     # first level
+        #     _, target_nodes = self.dataset.matcher.match_source_and_target_nodes(
+        #         "", data["text_question"]
+        #     )
+        #     nodes = self.dataset.matcher.matcher.kb.find_nodes(data["facts"])
+        #     filter_bound_num += 1
+        #     score = self.dataset.matcher.matcher.compute_f_beta_score(
+        #         nodes[0], target_nodes, beta=2
+        #     )
+        #     filter_bound_sum += score
+        #     filter_bound_range = [
+        #         min(filter_bound_range[0], score),
+        #         max(filter_bound_range[1], score),
+        #     ]
         #
-        #         if len(nodes) > 1:
-        #             (
-        #                 _,
-        #                 target_nodes,
-        #             ) = self.dataset.matcher.match_source_and_target_nodes(
-        #                 "", self.dataset.matcher.matcher.kb.nodes[nodes[0]].lower()
-        #             )
-        #             filter_bound_num_l2 += 1
-        #             score = self.dataset.matcher.matcher.compute_f_beta_score(
-        #                 nodes[1], target_nodes, beta=2
-        #             )
-        #             filter_bound_sum_l2 += score
-        #             filter_bound_range_l2 = [
-        #                 min(filter_bound_range_l2[0], score),
-        #                 max(filter_bound_range_l2[1], score),
-        #             ]
+        #     # next level
+        #     (_, target_nodes,) = self.dataset.matcher.match_source_and_target_nodes(
+        #         "", self.dataset.matcher.matcher.kb.nodes[nodes[0]].lower()
+        #     )
+        #     filter_bound_num_l2 += 1
+        #     score = self.dataset.matcher.matcher.compute_f_beta_score(
+        #         nodes[1], target_nodes, beta=2
+        #     )
+        #     filter_bound_sum_l2 += score
+        #     filter_bound_range_l2 = [
+        #         min(filter_bound_range_l2[0], score),
+        #         max(filter_bound_range_l2[1], score),
+        #     ]
         #
         # print(f"F-Beta:{filter_bound_sum / filter_bound_num}")
         # print(f"F-Beta: min={filter_bound_range[0]}, max={filter_bound_range[1]}")
@@ -119,27 +99,21 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
         #     f"F-Beta-l2: min={filter_bound_range_l2[0]}, max={filter_bound_range_l2[1]}"
         # )
 
-        self.reward_predictor = RewardPredictor(
-            config.base_type,
-            pad_by_longest=config.pad_by_longest,
-            max_length=config.max_seq_length,
-        )
-        self.reward_predictor.load_state_dict(t.load(config.initial_weight_path))
-
         self.reward_predictor_datasets = {
             split: RewardPredictorDataset(
-                f"commonsense_qa_{split}",
+                f"qasc_{split}",
                 [
                     (
                         d["text_question"],
-                        ", ".join(d["choices"]),
+                        d["text_choices"],
                         d["text_answer"],
-                        self.prompter.get_authoritative_reasoning_of_id(d["id"])[0],
+                        d["original_facts"],
                     )
                     for d in getattr(self.dataset, f"{split}_data")
-                    if self.prompter.is_authoritative_reasoning_of_id_available(d["id"])
                 ],
-                self.dataset.matcher,
+                matcher,
+                limit_size=limit_size,
+                limit_neg_transition_num=4000,
                 max_depth=self.config.max_depth,
                 negative_samples=self.config.negative_samples
                 if split == "train"
@@ -149,13 +123,9 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
                 else self.config.negative_shuffle_seed + get_rank(),
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
-                creator=RewardPredictorDatasetCreatorWithFilter,
-                limit_size=100 if split == "validate" else None,
             )
-            for split in ("train", "validate")
+            for split, limit_size in (("train", None), ("validate", 100))
         }
-        # Discard modified version
-        self.dataset = CommonsenseQABaseDataset(tokenizer=None,)
         self.test_result = {}
 
     @property
@@ -166,6 +136,9 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
     def monitor_mode(self):
         return "max"
 
+    def export_model(self):
+        return self.reward_predictor
+
     def train_dataloader(self):
         return self.create_sample_dataloader("train")
 
@@ -173,7 +146,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
         return self.create_sample_dataloader("validate")
 
     def test_dataloader(self):
-        path = os.path.join(preprocess_cache_dir, "commonsense_qa_sample_result.json")
+        path = os.path.join(preprocess_cache_dir, "qasc_sample_result.json")
         if os.path.exists(path):
             with open(path, "r",) as file:
                 self.test_result.update(json.load(file))
@@ -295,8 +268,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
             for id, paths, path_edges in sorted_outputs:
                 result[id] = (paths, path_edges)
             with open(
-                os.path.join(preprocess_cache_dir, "commonsense_qa_sample_result.json"),
-                "w",
+                os.path.join(preprocess_cache_dir, "qasc_sample_result.json"), "w",
             ) as file:
                 json.dump(result, file, indent=2)
 
@@ -349,7 +321,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")
-                # ][2067:2068]
+                # ][:520]
                 # if split == "train"
                 # else [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
@@ -371,6 +343,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                stop_when_reaching_target_nodes=False,
             ),
             batch_size=1,
             collate_fn=lambda x: x,

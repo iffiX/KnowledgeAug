@@ -109,6 +109,10 @@ PYBIND11_MODULE(matcher, m) {
             .def_readonly("corpus_size", &KnowledgeMatcher::corpusSize)
             .def_readonly("document_count_of_node_in_corpus", &KnowledgeMatcher::documentCountOfNodeInCorpus)
             .def("set_corpus", &KnowledgeMatcher::setCorpus)
+            .def("compute_f_beta_score", &KnowledgeMatcher::computeFBetaScore,
+                 py::arg("node"),
+                 py::arg("target_nodes"),
+                 py::arg("beta") = 2)
             .def("find_closest_concept", &KnowledgeMatcher::findClosestConcept)
             .def("find_shortest_path", &KnowledgeMatcher::findShortestPath,
                  py::arg("source_sentence"),
@@ -124,7 +128,9 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("start_nodes"),
                  py::arg("target_nodes"),
                  py::arg("max_depth") = 2,
-                 py::arg("only_target") = false)
+                 py::arg("only_target") = false,
+                 py::arg("filter_composite_nodes_by_f_beta") = false,
+                 py::arg("minimum_f_beta") = 0)
             .def("sub_paths_to_annotations", &KnowledgeMatcher::subPathsToAnnotations,
                  py::arg("sub_paths"),
                  py::arg("relationship_templates"),

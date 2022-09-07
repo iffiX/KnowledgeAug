@@ -29,12 +29,6 @@ class RewardPredictorDatasetCreator:
         self.end_of_reasoning = end_of_reasoning
 
     @staticmethod
-    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
-        RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreator(
-            data, matcher, max_depth, state_delimiter, end_of_reasoning
-        )
-
-    @staticmethod
     def get_transitions_for_sample(idx):
         try:
             self = RewardPredictorDatasetCreator.instance
@@ -68,12 +62,10 @@ class RewardPredictorDatasetCreator:
                     (
                         list_of_neg_sub_path_annotations,
                         _,
+                        _,
                         list_of_neg_sub_path_edges,
-                    ) = self.matcher.find_available_choices(
-                        visited_nodes,
-                        start_nodes,
-                        target_nodes,
-                        max_depth=self.max_depth,
+                    ) = self.find_available_choices(
+                        self, visited_nodes, start_nodes, target_nodes,
                     )
 
                     # exclude the right sub path
@@ -102,6 +94,44 @@ class RewardPredictorDatasetCreator:
             raise e
         return idx, transitions
 
+    @staticmethod
+    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+        RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreator(
+            data, matcher, max_depth, state_delimiter, end_of_reasoning
+        )
+
+    @staticmethod
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            max_depth=self.max_depth,
+        )
+
+
+class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
+    @staticmethod
+    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+        RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreatorWithFilter(
+            data, matcher, max_depth, state_delimiter, end_of_reasoning
+        )
+
+    @staticmethod
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            max_depth=self.max_depth,
+            filter_composite_nodes_by_f_beta=True,
+            minimum_f_beta=0.4,
+        )
+
 
 class RewardPredictorDataset(Dataset):
     def __init__(
@@ -110,42 +140,40 @@ class RewardPredictorDataset(Dataset):
         data: List[Tuple[str, str, str, List[str]]],
         matcher: BaseMatcher,
         limit_size: int = None,
+        limit_neg_transition_num: int = None,
         max_depth: int = 2,
         negative_samples: Union[int, None] = 5,
         negative_shuffle_seed: int = 42,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        creator=None,
     ):
         """
         Args:
             name: Dataset name, used to differ cache from one another.
             data: A list of tuples of question, choices, answer and facts.
         """
+        self.name = name
         self.data = data
         self.rand = random.Random(negative_shuffle_seed)
         self.matcher = matcher
+        self.limit_size = limit_size
+        self.limit_neg_transition_num = limit_neg_transition_num
         self.max_depth = max_depth
         self.negative_samples = negative_samples
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
-
-        with PickleCache(
-            os.path.join(preprocess_cache_dir, f"{name}_reward_predictor.data"),
-            generate_func=self.get_pretrain_data,
-        ) as cache:
-            self.pretrain_data = cache.data
-
-        if limit_size is not None:
-            self.pretrain_data = (
-                self.pretrain_data[0][:limit_size],
-                self.pretrain_data[1][:limit_size],
-                self.pretrain_data[2][:limit_size],
-            )
+        self.creator = creator or RewardPredictorDatasetCreator
+        self.pretrain_data = None
 
     def __len__(self):
+        if self.pretrain_data is None:
+            self.load()
         return len(self.pretrain_data[0])
 
     def __getitem__(self, idx):
+        if self.pretrain_data is None:
+            self.load()
         if self.negative_samples is not None:
             negative_samples = min(
                 self.negative_samples, len(self.pretrain_data[2][idx])
@@ -183,10 +211,26 @@ class RewardPredictorDataset(Dataset):
                 + append,
             )
 
+    def load(self):
+        with PickleCache(
+            os.path.join(preprocess_cache_dir, f"{self.name}_reward_predictor.data"),
+            generate_func=self.get_pretrain_data,
+        ) as cache:
+            self.pretrain_data = cache.data
+
+        if self.limit_size is not None:
+            shuffled_indices = list(range(len(self.pretrain_data[0])))
+            self.rand.shuffle(shuffled_indices)
+            self.pretrain_data = (
+                [self.pretrain_data[0][i] for i in shuffled_indices[: self.limit_size]],
+                [self.pretrain_data[1][i] for i in shuffled_indices[: self.limit_size]],
+                [self.pretrain_data[2][i] for i in shuffled_indices[: self.limit_size]],
+            )
+
     def get_pretrain_data(self):
         result = []
         with mp.Pool(
-            initializer=RewardPredictorDatasetCreator.initialize_pool,
+            initializer=self.creator.initialize_pool,
             initargs=(
                 self.data,
                 self.matcher,
@@ -196,12 +240,23 @@ class RewardPredictorDataset(Dataset):
             ),
         ) as pool, tqdm.tqdm(total=len(self.data)) as pbar:
             for (idx, transitions) in pool.imap_unordered(
-                RewardPredictorDatasetCreator.get_transitions_for_sample,
-                range(len(self.data)),
+                self.creator.get_transitions_for_sample, range(len(self.data)),
             ):
                 pbar.update()
+                if self.limit_neg_transition_num is not None:
+                    new_transitions = []
+                    for trans in transitions:
+                        self.rand.shuffle(trans[2])
+                        new_transitions.append(
+                            (
+                                trans[0],
+                                trans[1],
+                                trans[2][: self.limit_neg_transition_num],
+                            )
+                        )
+                    transitions = new_transitions
                 result.append((idx, transitions))
-        transitions = [trans[1] for trans in sorted(result, key=lambda trans: trans[0])]
+        transitions = [res[1] for res in sorted(result, key=lambda res: res[0])]
         transitions = [ttr for tr in transitions for ttr in tr]
         states = [trans[0] for trans in transitions]
         actions = [trans[1] for trans in transitions]
@@ -227,6 +282,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         inference_batch_size: int = 128,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        stop_when_reaching_target_nodes: bool = True,
     ):
         """
         Args:
@@ -247,6 +303,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         self.inference_batch_size = inference_batch_size
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
+        self.stop_when_reaching_target_nodes = stop_when_reaching_target_nodes
 
     def __len__(self):
         return len(self.data)
@@ -313,7 +370,9 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                     len(set(current_reached_nodes).intersection(target_nodes_set)) > 0
                 )
 
-                if length > 0 and has_reached:
+                if (
+                    length > 0 and has_reached and self.stop_when_reaching_target_nodes
+                ) or (length > 0 and len(current_reached_nodes) == 1):
                     h = self.extend_hypothesis(
                         h, (self.EOS, None), (), self.return_and_increase(push_count)
                     )
@@ -327,19 +386,16 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                     if length == self.max_steps:
                         annotations = [self.EOS]
                         list_of_sub_path_next_nodes = [[]]
+                        list_of_sub_path_raw_next_nodes = [-1]
                         list_of_sub_path_edges = [[]]
                     else:
                         (
                             list_of_sub_path_annotations,
                             list_of_sub_path_next_nodes,
+                            list_of_sub_path_raw_next_nodes,
                             list_of_sub_path_edges,
-                        ) = self.matcher.find_available_choices(
-                            visited_nodes,
-                            current_reached_nodes,
-                            target_nodes,
-                            max_depth=self.max_depth,
-                            only_target=length == self.max_steps - 1
-                            and self.max_steps > 1,
+                        ) = self.find_available_choices(
+                            visited_nodes, current_reached_nodes, target_nodes, length
                         )
                         annotations = [
                             self.state_delimiter.join(sub_path_annotations)
@@ -366,19 +422,20 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
                     # prune paths with the same end nodes, keep the one with the highest log probability
                     highest_scores = {}
-                    for ann_idx, (annotation, next_nodes) in enumerate(
-                        zip(annotations, list_of_sub_path_next_nodes)
+                    for ann_idx, (annotation, next_node) in enumerate(
+                        zip(annotations, list_of_sub_path_raw_next_nodes)
                     ):
-                        next_nodes = tuple(sorted(next_nodes))
-                        if next_nodes not in highest_scores:
-                            highest_scores[next_nodes] = ann_idx
-                        elif log_prob[highest_scores[next_nodes]] < log_prob[ann_idx]:
-                            highest_scores[next_nodes] = ann_idx
+                        if (
+                            next_node not in highest_scores
+                            or log_prob[highest_scores[next_node]] < log_prob[ann_idx]
+                        ):
+                            highest_scores[next_node] = ann_idx
+
                     suboptimal_paths = t.ones(
                         log_prob.shape, dtype=t.bool, device=log_prob.device
                     )
-                    for ann_idx in highest_scores.values():
-                        suboptimal_paths[ann_idx] = 0
+
+                    suboptimal_paths[list(highest_scores.values())] = 0
                     log_prob.masked_fill_(suboptimal_paths, -20)
 
                     score = self.get_score(h)
@@ -485,6 +542,17 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
         return all_masked, log_prob
 
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes, length
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            max_depth=self.max_depth,
+            only_target=length == self.max_steps - 1 and self.max_steps > 1,
+        )
+
     @staticmethod
     def return_and_increase(counter):
         count = counter[0]
@@ -552,3 +620,20 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
     @staticmethod
     def get_sequence_edges(hypothesis):
         return tuple(segment[1] for segment in hypothesis[3][0][:-1])
+
+
+class RewardPredictorBestFirstBeamSearchDatasetWithFilter(
+    RewardPredictorBestFirstBeamSearchDataset
+):
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes, length
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            max_depth=self.max_depth,
+            only_target=length == self.max_steps - 1 and self.max_steps > 1,
+            filter_composite_nodes_by_f_beta=True,
+            minimum_f_beta=0.35,
+        )

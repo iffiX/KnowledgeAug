@@ -9,6 +9,8 @@ from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
+from .qasc_sample_trainer import QASCSampleTrainer
+from .qasc_augment_trainer import QASCAugmentTrainer
 from .arc_trainer import ARCTrainer
 from .ensemble_trainer import EnsembleTrainer
 from .test_distributed_trainer import TestDistributedTrainer
@@ -23,10 +25,14 @@ stage_name_to_trainer_map = {
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_sample": OpenBookQASampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
+    "qasc_sample": QASCSampleTrainer,
+    "qasc_augment": QASCAugmentTrainer,
     "test_distributed": TestDistributedTrainer,
     "arc": ARCTrainer,
     "ensemble": EnsembleTrainer,
 }
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 def find_checkpoint(
@@ -125,6 +131,7 @@ def _train(
         mode=stage_trainer.monitor_mode,
         verbose=True,
     )
+    stage_trainer.current_mode = "train"
     early_stopping = EarlyStopping(
         monitor=stage_trainer.monitor,
         mode=stage_trainer.monitor_mode,
@@ -235,6 +242,7 @@ def run(config: Config, stage_index: int, mode: str = "train"):
         # the ckpt_path in test will be ignored in this case.
         # and must perform manual load
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
+        stage_trainer.current_mode = mode
 
         is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
             isinstance(config.gpus, int) and config.gpus > 1
@@ -278,6 +286,8 @@ def run(config: Config, stage_index: int, mode: str = "train"):
             logging.info(f"Using checkpoint {checkpoint}")
 
         stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
+        stage_trainer.current_mode = mode
+
         is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (
             isinstance(config.gpus, int) and config.gpus > 1
         )

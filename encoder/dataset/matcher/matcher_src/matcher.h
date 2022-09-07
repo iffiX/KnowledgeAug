@@ -215,14 +215,11 @@ public:
         long root;
         size_t rootStartPos;
         size_t rootEndPos;
-        int matchedFocusCount;
         std::vector<size_t> edges;
         std::unordered_map<size_t, float> similarities;
-        std::unordered_map<size_t, long> similarityTargets;
         std::unordered_set<long> visitedNodes;
 
         float bestSimilarity;
-        long bestSimilarityTarget;
         std::vector<size_t> uncoveredEdges;
     };
 
@@ -230,7 +227,6 @@ public:
         std::vector<VisitedPath> visitedPaths;
         std::unordered_set<long> coveredCompositeNodes;
         std::unordered_set<std::pair<long, long>, PairHash> coveredNodePairs;
-        std::unordered_map<std::pair<long, long>, float, PairHash> sourceToTargetSimilarity;
         // (source node start pos, source node end pos), edges
         std::unordered_map<std::pair<size_t, size_t>, std::vector<size_t>, PairHash> coveredSubGraph;
     };
@@ -247,6 +243,7 @@ public:
     typedef std::tuple<std::vector<long>, std::vector<long>> SourceAndTargetNodes;
     typedef std::tuple<std::vector<std::vector<std::vector<int>>>,
                        std::vector<std::vector<long>>,
+                       std::vector<long>,
                        std::vector<std::vector<Edge>>> ChoiceResult;
 
 public:
@@ -262,6 +259,8 @@ public:
 
     void setCorpus(const std::vector<std::vector<int>> &corpus);
 
+    float computeFBetaScore(long node, const std::vector<long> &targetNodes, float beta = 2) const;
+
     std::string findClosestConcept(std::string targetConcept, const std::vector<std::string> &concepts) const;
 
     PathResult findShortestPath(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence,
@@ -275,7 +274,9 @@ public:
                                       const std::vector<long> &startNodes,
                                       const std::vector<long> &targetNodes,
                                       int maxDepth = 2,
-                                      bool onlyTarget = false) const;
+                                      bool onlyTarget = false,
+                                      bool filterCompositeNodesByFBeta = false,
+                                      float minimumFBeta = 0) const;
 
     std::vector<std::vector<std::string>> subPathsToAnnotations(const std::vector<std::vector<Edge>> &subPaths,
                                                                 const std::vector<std::string> &relationshipTemplates,
@@ -322,9 +323,15 @@ private:
 
     std::string edgeToStringAnnotation(const Edge &edge) const;
 
-    float computeTfidf(long node, float documentNodeCountSum,
-                       const std::unordered_map<long, float> &nodeCount,
-                       const std::unordered_map<long, float> &documentNodeCount) const;
+    float computeFBetaScoreWithCache(long node, const std::unordered_map<long, float> &targetNodes,
+                                     std::unordered_map<std::pair<long, long>, float, PairHash> &similarityCache,
+                                     float beta = 2) const;
+
+    static float computeNodeCountSum(const std::unordered_map<long, float> &nodeCount);
+
+    static float computeTfidf(long node, float documentSize, float corpusSize,
+                              const std::unordered_map<long, float> &nodeCountInDocument,
+                              const std::unordered_map<long, float> &nodeCountInCorpus);
 
     void matchForSourceAndTarget(const std::vector<int> &sourceSentence,
                                  const std::vector<int> &targetSentence,
@@ -347,7 +354,6 @@ private:
     void updatePath(VisitedPath &path,
                     const std::unordered_set<long> &coveredCompositeNodes,
                     const std::unordered_set<std::pair<long, long>, PairHash> &coveredNodePairs,
-                    const std::unordered_map<std::pair<long, long>, float, PairHash> &sourceToTargetSimilarity,
                     int remainingEdges) const;
 
     static void keepTopK(std::vector<float> &weights, int k = -1);

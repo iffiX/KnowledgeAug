@@ -1,18 +1,17 @@
 {
     "configs": [
         {
-            "base_type": "microsoft/deberta-v3-large",
-            "initial_weight_path": "/home/muhan/data/workspace/knowledge_aug/exported_models/ob_qa_sample_0.700.model",
+            "base_type": "cross-encoder/ms-marco-MiniLM-L-12-v2",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 7,
+            "negative_samples": 15,
             "learning_rate": 5e-6,
             "inference_batch_size": 128,
             "load": false,
-            "max_seq_length": 256,
+            "max_seq_length": 200,
             "pad_by_longest": true,
-            "min_logits": -3,
-            "max_steps": 2,
+            "min_logits": -2,
+            "max_steps": 3,
             "max_depth": 2,
             "optimizer_class": "AdamW",
             "state_delimeter": ", ",
@@ -20,10 +19,11 @@
             "save": true
         }
     ],
+    "override_saved_config": {"0": {"max_inference_num": 60000, "min_logits": -2, "beam_size": 5, "inference_batch_size": 1024}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
-        "commonsense_qa_sample"
+        "qasc_sample"
     ],
-    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_comm_qa_sample"
+    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_qasc_sample"
 }

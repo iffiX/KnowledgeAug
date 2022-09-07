@@ -9,15 +9,15 @@ import numpy as np
 import torch as t
 from typing import List, Tuple, Dict, Union
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
-from encoder.dataset.download import CommonsenseQA
-from encoder.dataset.matcher.commonsense_qa import CommonsenseQAMatcher
+from encoder.dataset.download import QASC
+from encoder.dataset.matcher.qasc import QASCMatcher
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.file import PickleCache, open_file_with_create_directories
 from .base import StaticIterableDataset
 from .utils import normalize_t5_input
 
 
-class CommonsenseQABaseDataset:
+class QASCBaseDataset:
     def __init__(
         self,
         tokenizer: Union[PreTrainedTokenizerBase, None],
@@ -28,18 +28,15 @@ class CommonsenseQABaseDataset:
 
         # Word piece is stabler for matching purpose
         self.matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        self.matcher = CommonsenseQAMatcher(tokenizer=self.matcher_tokenizer)
-        self.commonsense_qa = CommonsenseQA().require()
+        self.matcher = QASCMatcher(tokenizer=self.matcher_tokenizer)
+        self.commonsense_qa = QASC().require()
 
         with PickleCache(
-            os.path.join(preprocess_cache_dir, "commonsense_qa.data"),
-            self.generate_data,
+            os.path.join(preprocess_cache_dir, "qasc.data"), self.generate_data,
         ) as cache:
             self.train_data = cache.data["train"]
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
-
-        self.disable_dict = {"train": [], "validate": []}
         self.set_corpus()
 
     @property
@@ -71,8 +68,8 @@ class CommonsenseQABaseDataset:
         ref_labels = batch["label"].cpu().numpy()
 
         for i in range(labels.shape[0]):
-            answer = ["A", "B", "C", "D", "E"][labels[i]]
-            ref_answer = ["A", "B", "C", "D", "E"][batch["label"][i]]
+            answer = ["A", "B", "C", "D", "E", "F", "G", "H"][labels[i]]
+            ref_answer = ["A", "B", "C", "D", "E", "F", "G", "H"][batch["label"][i]]
 
             tokens = batch["sentence"][i]
             if tokens.dim() > 1:
@@ -150,14 +147,14 @@ class CommonsenseQABaseDataset:
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1).tolist()
         with open_file_with_create_directories(
-            os.path.join(directory, "commonsense_qa.jsonl"), "w"
+            os.path.join(directory, "qasc.jsonl"), "w"
         ) as file:
             if len(labels) != len(self.test_data):
                 raise ValueError(
                     f"Label size {len(labels)} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["A", "B", "C", "D", "E"]
+            answer_keys = ["A", "B", "C", "D", "E", "F", "G", "H"]
             for label, preprocessed in zip(labels, self.test_data):
                 file.write(
                     json.dumps(
@@ -168,14 +165,14 @@ class CommonsenseQABaseDataset:
     def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
-            os.path.join(directory, "commonsense_qa.jsonl"), "w"
+            os.path.join(directory, "qasc.jsonl"), "w"
         ) as file:
             if tokens.shape[0] != len(self.test_data):
                 raise ValueError(
                     f"Token size {tokens.shape[0]} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["A", "B", "C", "D", "E"]
+            answer_keys = ["A", "B", "C", "D", "E", "F", "G", "H"]
             for answer_tokens, preprocessed in zip(tokens, self.test_data):
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
@@ -209,12 +206,12 @@ class CommonsenseQABaseDataset:
 
     def generate_data(self):
         return {
-            "train": self.parse_data(self.commonsense_qa.train_path),
-            "validate": self.parse_data(self.commonsense_qa.validate_path),
-            "test": self.parse_data(self.commonsense_qa.test_path),
+            "train": self.parse_data(self.commonsense_qa.train_path, "train"),
+            "validate": self.parse_data(self.commonsense_qa.validate_path, "validate"),
+            "test": self.parse_data(self.commonsense_qa.test_path, "test"),
         }
 
-    def parse_data(self, path):
+    def parse_data(self, path, split):
         data = []
         logging.info(f"Parsing {path}")
         with open(path, "r") as file:
@@ -232,7 +229,18 @@ class CommonsenseQABaseDataset:
                 preprocessed = {
                     "text_question": entry["question"]["stem"],
                     "text_choices": text_choices,
-                    "question_concept": entry["question"]["question_concept"],
+                    "original_facts": [
+                        self.normalize_fact(entry["fact1"]),
+                        self.normalize_fact(entry["fact2"]),
+                    ]
+                    if split != "test"
+                    else [],
+                    "facts": [
+                        self.normalize_fact(entry["fact1"]),
+                        self.normalize_fact(entry["fact2"]),
+                    ]
+                    if split == "train"
+                    else [],
                     "choices": choices,
                     "id": entry["id"],
                 }
@@ -263,8 +271,12 @@ class CommonsenseQABaseDataset:
             labels.append(f"({char})")
         return labels
 
+    @staticmethod
+    def normalize_fact(fact):
+        return fact.strip("\n").strip(".").strip('"').strip("'").strip(",").lower()
 
-class CommonsenseQAAugmentDataset(CommonsenseQABaseDataset):
+
+class QASCAugmentDataset(QASCBaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
@@ -281,7 +293,17 @@ class CommonsenseQAAugmentDataset(CommonsenseQABaseDataset):
         self.rand = random.Random(42)
         self.rand_train = True
 
-        super(CommonsenseQAAugmentDataset, self).__init__(tokenizer)
+        super(QASCAugmentDataset, self).__init__(tokenizer)
+
+        count = 0
+        for data in self.validate_data:
+            for fact in data["original_facts"]:
+                for path in self.augment_contexts[0][data["id"]]:
+                    if fact in path:
+                        count += 1
+                        break
+        print(f"Average retrieval length: {count / len(self.validate_data)}")
+
         for split, split_data in (
             ("train", self.train_data),
             ("validate", self.validate_data),

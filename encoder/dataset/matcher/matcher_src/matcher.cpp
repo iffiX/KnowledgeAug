@@ -750,6 +750,15 @@ void KnowledgeMatcher::setCorpus(const vector<vector<int>> &corpus) {
     bar.finish();
 }
 
+float KnowledgeMatcher::computeFBetaScore(long node, const vector<long> &targetNodes,
+                                          float beta) const {
+    unordered_map<pair<long, long>, float, PairHash> similarityCache;
+    unordered_map<long, float> targetNodeCounts;
+    for (long node : targetNodes)
+        targetNodeCounts[node] += 1;
+    return computeFBetaScoreWithCache(node, targetNodeCounts, similarityCache, beta);
+}
+
 string KnowledgeMatcher::findClosestConcept(string targetConcept, const vector<string> &concepts) const {
     auto targetIdVec = kb.findNodes({targetConcept});
     long targetId = targetIdVec[0];
@@ -1099,7 +1108,9 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                                        const std::vector<long> &startNodes,
                                        const std::vector<long> &targetNodes,
                                        int maxDepth,
-                                       bool onlyTarget) const {
+                                       bool onlyTarget,
+                                       bool filterCompositeNodesByFBeta,
+                                       float minimumFBeta) const {
 #ifdef DEBUG
     cout << "================================================================================" << endl;
     cout << "Method: findAvailableChoices" << endl;
@@ -1115,6 +1126,11 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
 
     ChoiceResult result;
     unordered_set<long> targetNodesSet(targetNodes.begin(), targetNodes.end());
+    unordered_map<pair<long, long>, float, PairHash> similarityCache;
+    unordered_map<long, float> context;
+
+    for (long startNode : startNodes)
+        context[startNode] += 1;
 
     size_t bestLevelDepth = maxDepth;
 
@@ -1133,12 +1149,17 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         for (step = 0; step < bestLevelDepth; step++) {
             unordered_set<long> newVisitedNodes;
             for (long lastNode : lastStepVisitedNodes) {
-                auto neighbors = kb.getNodeNeighbors(lastNode);
-                for (long neighbor : neighbors) {
-                    // If the neighbor node is only visited in the current step
-                    if (not visited[neighbor]) {
-                        previousNodes[neighbor].push_back(lastNode);
-                        newVisitedNodes.insert(neighbor);
+                // We only want paths made up of hops between non composite nodes to either:
+                // 1) one of a target node
+                // 2) one of a composite node
+                if (not kb.isNodeComposite[lastNode]) {
+                    auto neighbors = kb.getNodeNeighbors(lastNode);
+                    for (long neighbor : neighbors) {
+                        // If the neighbor node is only visited in the current step
+                        if (not visited[neighbor]) {
+                            previousNodes[neighbor].push_back(lastNode);
+                            newVisitedNodes.insert(neighbor);
+                        }
                     }
                 }
             }
@@ -1169,11 +1190,15 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                 unvisited.push(make_pair(node, vector<long>{node}));
         }
         // Find all visited composite nodes and add them as reversed starts
-        // Note that visited nodes may not be visited in the current traversal, exclude them
+        // Note that visited nodes may not be visited in the current traversal (see argument visitedNodes)
+        // exclude them
         if (not onlyTarget) {
             for (long node = 0; node < kb.nodes.size(); node++) {
-                if (visited[node] and kb.isNodeComposite[node] and previousNodes.find(node) != previousNodes.end() and
-                    targetNodesSet.find(node) == targetNodesSet.end())
+                if (visited[node] and kb.isNodeComposite[node]
+                    and previousNodes.find(node) != previousNodes.end()
+                    and targetNodesSet.find(node) == targetNodesSet.end()
+                    and (not filterCompositeNodesByFBeta
+                         or computeFBetaScoreWithCache(node, context, similarityCache, 2) > minimumFBeta))
                     unvisited.push(make_pair(node, vector<long>{node}));
             }
         }
@@ -1228,9 +1253,9 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                 else
                     endNodes.push_back(rpn[0]);
                 get<1>(result).emplace_back(endNodes);
-
+                get<2>(result).emplace_back(rpn[0]);
                 // Store path
-                get<2>(result).emplace_back(path);
+                get<3>(result).emplace_back(path);
             }
         }
     }
@@ -1440,13 +1465,6 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
         cout << "Parameter maxTimes " << maxTimes << " is smaller than 2 * node size " << nodes.size()
              << ", which may result in insufficient exploration, consider increase maxTimes." << endl;
 
-    float compositeNodesCountSum = 0;
-    float corpusNodesCountSum = 0;
-    for (auto &count : documentCountOfNodeInCorpus)
-        corpusNodesCountSum += count.second;
-    for (auto &count : kb.compositeComponentCount)
-        compositeNodesCountSum += count.second;
-
     for (int i = 0; i < maxTimes; i++) {
         mt19937 gen(seed ^ i);
 
@@ -1465,7 +1483,6 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
         path.root = rootNode;
         path.rootStartPos = get<1>(nodes[nodeLocalIndex]);
         path.rootEndPos = get<2>(nodes[nodeLocalIndex]);
-        path.matchedFocusCount = 0;
         path.visitedNodes.insert(currentNode);
 
         unordered_map<long, float> oldTargetNodes = targetNodes;
@@ -1482,13 +1499,11 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
 #endif
         for (int d = 0; d < maxDepth; d++) {
             vector<float> sim;
-            vector<long> simTarget;
             bool hasOut = kb.edgeFromSource.find(currentNode) != kb.edgeFromSource.end();
             bool hasIn = kb.edgeToTarget.find(currentNode) != kb.edgeToTarget.end();
             size_t outSize = hasOut ? kb.edgeFromSource.at(currentNode).size() : 0;
             size_t inSize = hasIn ? kb.edgeToTarget.at(currentNode).size() : 0;
             sim.resize(outSize + inSize, 0);
-            simTarget.resize(outSize + inSize, -1);
 
 #ifdef DEBUG_DECISION
             cout << fmt::format("Current node: [{}:{}]", kb.nodes[currentNode], currentNode) << endl;
@@ -1512,135 +1527,20 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
                                         disabledNodeSet.find(otherNodeId) != disabledNodeSet.end()) << endl;
 #endif
                 } else {
-                    float precision = 1e-4, recall = 1e-4,
-                            precision_idf_sum = 0, recall_idf_sum = 0;
-                    bool isNodeComposite = kb.isNodeComposite[otherNodeId];
-
-                    if (isNodeComposite) {
-                        for (auto &tNode : targetNodes) {
-                            float subNodeSim = -1, simToEachTarget = -1;
-                            long subNodeBest = -1;
-
-                            for (auto &subNode : kb.compositeNodes.at(otherNodeId)) {
-                                auto simPair = make_pair(tNode.first, subNode.first);
-                                if (similarityCache.find(simPair) == similarityCache.end()) {
-                                    simToEachTarget = kb.cosineSimilarity(subNode.first, tNode.first);
-                                    similarityCache[simPair] = simToEachTarget;
-                                } else {
-                                    simToEachTarget = similarityCache.at(simPair);
-                                }
-                                if (simToEachTarget > subNodeSim) {
-                                    subNodeSim = simToEachTarget;
-                                    subNodeBest = subNode.first;
-                                }
-                            }
-
-                            float tfidf = computeTfidf(tNode.first, corpusNodesCountSum,
-                                                       targetNodes, documentCountOfNodeInCorpus);
-
-#ifdef DEBUG_DECISION
-                            cout << fmt::format("Target node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
-                                                kb.nodes[tNode.first], tNode.first,
-                                                kb.nodes[subNodeBest], subNodeBest,
-                                                subNodeSim, tfidf) << endl;
-#endif
-                            recall += subNodeSim * tfidf;
-                            recall_idf_sum += tfidf;
-                        }
-
-                        for (auto &subNode : kb.compositeNodes.at(otherNodeId)) {
-                            float tNodeSim = -1, simToEachTarget = -1;
-                            long tNodeBest = -1;
-
-                            for (auto &tNode : targetNodes) {
-                                auto simPair = make_pair(tNode.first, subNode.first);
-                                if (similarityCache.find(simPair) == similarityCache.end()) {
-                                    simToEachTarget = kb.cosineSimilarity(subNode.first, tNode.first);
-                                    similarityCache[simPair] = simToEachTarget;
-                                } else {
-                                    simToEachTarget = similarityCache.at(simPair);
-                                }
-
-                                if (simToEachTarget > tNodeSim) {
-                                    tNodeSim = simToEachTarget;
-                                    tNodeBest = tNode.first;
-                                }
-                            }
-
-                            float tfidf = computeTfidf(subNode.first, compositeNodesCountSum,
-                                                       kb.compositeNodes.at(otherNodeId),
-                                                       kb.compositeComponentCount);
-#ifdef DEBUG_DECISION
-                            cout << fmt::format("Sub node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
-                                                kb.nodes[subNode.first], subNode.first,
-                                                kb.nodes[tNodeBest], tNodeBest,
-                                                tNodeSim, tfidf) << endl;
-#endif
-                            precision += tNodeSim * tfidf;
-                            precision_idf_sum += tfidf;
-                        }
-                        recall /= recall_idf_sum;
-                        precision /= precision_idf_sum;
-                    } else {
-                        float tNodeSim = -1, simToEachTarget = -1;
-                        long tNodeBest = -1;
-                        for (auto &tNode : targetNodes) {
-                            auto simPair = make_pair(tNode.first, otherNodeId);
-                            if (similarityCache.find(simPair) == similarityCache.end()) {
-                                simToEachTarget = kb.cosineSimilarity(otherNodeId, tNode.first);
-                                similarityCache[simPair] = simToEachTarget;
-                            } else {
-                                simToEachTarget = similarityCache.at(simPair);
-                            }
-
-                            if (simToEachTarget > tNodeSim) {
-                                tNodeSim = simToEachTarget;
-                                tNodeBest = tNode.first;
-                            }
-
-                            float tfidf = computeTfidf(tNode.first, corpusNodesCountSum,
-                                                       targetNodes, documentCountOfNodeInCorpus);
-
-#ifdef DEBUG_DECISION
-                            cout << fmt::format("Target node [{}:{}], node [{}:{}], sim {}, tfidf {}",
-                                                kb.nodes[tNode.first], tNode.first,
-                                                kb.nodes[otherNodeId], otherNodeId,
-                                                simToEachTarget, tfidf) << endl;
-#endif
-
-                            recall += simToEachTarget * tfidf;
-                            recall_idf_sum += tfidf;
-                        }
-
-#ifdef DEBUG_DECISION
-                        cout << fmt::format("Node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
-                                            kb.nodes[otherNodeId], otherNodeId,
-                                            kb.nodes[tNodeBest], tNodeBest,
-                                            tNodeSim, 1) << endl;
-#endif
-                        precision = tNodeSim;
-                        recall = recall / recall_idf_sum;
-                    }
-                    recall = recall > 0 ? recall : 0;
-                    precision = precision > 0 ? precision : 0;
-#ifdef DEBUG_DECISION
-                    cout << fmt::format("recall: {}, precision: {}", recall, precision) << endl;
-#endif
-                    float simTmp = (5 * recall * precision) / (recall + 4 * precision + 1e-6);
+                    float simTmp = computeFBetaScoreWithCache(otherNodeId, targetNodes, similarityCache, 2);
                     if (simTmp < stopSearchingEdgeIfSimilarityBelow)
                         simTmp = 0;
                     sim[j] = simTmp;
                 }
 #ifdef DEBUG_DECISION
                 cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
-                                    "similarity {} to target [{}:{}]",
+                                    "similarity {}",
                                     edgeIndex,
                                     kb.nodes[get<0>(edge)], get<0>(edge),
                                     kb.relationships[get<1>(edge)], get<1>(edge),
                                     kb.nodes[get<2>(edge)], get<2>(edge),
                                     edgeToStringAnnotation(edgeIndex),
-                                    sim[j],
-                                    simTarget[j] == -1 ? "" : kb.nodes[simTarget[j]], simTarget[j]) << endl;
+                                    sim[j]) << endl;
 #endif
             }
 
@@ -1666,7 +1566,6 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
             path.visitedNodes.insert(currentNode);
             path.edges.push_back(selectedEdgeIndex);
             path.similarities[selectedEdgeIndex] = sim[e];
-            path.similarityTargets[selectedEdgeIndex] = simTarget[e];
 
 #ifdef DEBUG_DECISION
             cout << endl;
@@ -1769,21 +1668,161 @@ string KnowledgeMatcher::edgeToStringAnnotation(const Edge &edge) const {
     return move(edgeAnno);
 }
 
-float KnowledgeMatcher::computeTfidf(long node, float documentNodeCountSum,
-                                     const unordered_map<long, float> &nodeCount,
-                                     const unordered_map<long, float> &documentNodeCount) const {
-    if (not isCorpusSet)
-        return 1;
-    float documentCount = 1;
-    if (documentNodeCount.find(node) != documentNodeCount.end())
-        documentCount += documentNodeCount.at(node);
+float KnowledgeMatcher::computeFBetaScoreWithCache(long node, const unordered_map<long, float> &targetNodes,
+                                                   unordered_map<pair<long, long>, float, PairHash> &similarityCache,
+                                                   float beta) const {
+    float precision = 1e-4, recall = 1e-4, precision_idf_sum = 0, recall_idf_sum = 0;
+    bool isNodeComposite = kb.isNodeComposite[node];
 
-    float idf = log(documentNodeCountSum / documentCount);
+    if (isNodeComposite) {
+        for (auto &tNode : targetNodes) {
+            float subNodeSim = -1, simToEachTarget = -1;
+            long subNodeBest = -1;
+
+            for (auto &subNode : kb.compositeNodes.at(node)) {
+                auto simPair = make_pair(tNode.first, subNode.first);
+                if (similarityCache.find(simPair) == similarityCache.end()) {
+                    simToEachTarget = kb.cosineSimilarity(subNode.first, tNode.first);
+                    similarityCache[simPair] = simToEachTarget;
+                } else {
+                    simToEachTarget = similarityCache.at(simPair);
+                }
+                if (simToEachTarget > subNodeSim) {
+                    subNodeSim = simToEachTarget;
+                    subNodeBest = subNode.first;
+                }
+            }
+
+            // For target nodes, the document is themselves (the target sentence)
+            // the corpus is the preset corpus
+            float tfidf = isCorpusSet ?
+                          computeTfidf(tNode.first,
+                                       computeNodeCountSum(targetNodes),
+                                       float(corpusSize),
+                                       targetNodes,
+                                       documentCountOfNodeInCorpus) : 1;
+
+#ifdef DEBUG_DECISION
+            cout << fmt::format("Target node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
+                                                kb.nodes[tNode.first], tNode.first,
+                                                kb.nodes[subNodeBest], subNodeBest,
+                                                subNodeSim, tfidf) << endl;
+#endif
+            recall += subNodeSim * tfidf;
+            recall_idf_sum += tfidf;
+        }
+
+        for (auto &subNode : kb.compositeNodes.at(node)) {
+            float tNodeSim = -1, simToEachTarget = -1;
+            long tNodeBest = -1;
+
+            for (auto &tNode : targetNodes) {
+                auto simPair = make_pair(tNode.first, subNode.first);
+                if (similarityCache.find(simPair) == similarityCache.end()) {
+                    simToEachTarget = kb.cosineSimilarity(subNode.first, tNode.first);
+                    similarityCache[simPair] = simToEachTarget;
+                } else {
+                    simToEachTarget = similarityCache.at(simPair);
+                }
+
+                if (simToEachTarget > tNodeSim) {
+                    tNodeSim = simToEachTarget;
+                    tNodeBest = tNode.first;
+                }
+            }
+
+            // For composite nodes, the document is themselves (the composite node sentence)
+            // the corpus is the set of all composite nodes
+            float tfidf = isCorpusSet ?
+                          computeTfidf(subNode.first,
+                                       computeNodeCountSum(kb.compositeNodes.at(node)),
+                                       float(kb.compositeNodes.size()),
+                                       kb.compositeNodes.at(node),
+                                       kb.compositeComponentCount) : 1;
+#ifdef DEBUG_DECISION
+            cout << fmt::format("Sub node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
+                                                kb.nodes[subNode.first], subNode.first,
+                                                kb.nodes[tNodeBest], tNodeBest,
+                                                tNodeSim, tfidf) << endl;
+#endif
+            precision += tNodeSim * tfidf;
+            precision_idf_sum += tfidf;
+        }
+        recall /= recall_idf_sum;
+        precision /= precision_idf_sum;
+    } else {
+        float tNodeSim = -1, simToEachTarget = -1;
+        long tNodeBest = -1;
+        for (auto &tNode : targetNodes) {
+            auto simPair = make_pair(tNode.first, node);
+            if (similarityCache.find(simPair) == similarityCache.end()) {
+                simToEachTarget = kb.cosineSimilarity(node, tNode.first);
+                similarityCache[simPair] = simToEachTarget;
+            } else {
+                simToEachTarget = similarityCache.at(simPair);
+            }
+
+            if (simToEachTarget > tNodeSim) {
+                tNodeSim = simToEachTarget;
+                tNodeBest = tNode.first;
+            }
+
+            // For target nodes, the document is themselves (the target sentence)
+            // the corpus is the preset corpus
+            float tfidf = isCorpusSet ?
+                          computeTfidf(tNode.first,
+                                       computeNodeCountSum(targetNodes),
+                                       float(corpusSize),
+                                       targetNodes,
+                                       documentCountOfNodeInCorpus) : 1;
+
+#ifdef DEBUG_DECISION
+            cout << fmt::format("Target node [{}:{}], node [{}:{}], sim {}, tfidf {}",
+                                                kb.nodes[tNode.first], tNode.first,
+                                                kb.nodes[node], node,
+                                                simToEachTarget, tfidf) << endl;
+#endif
+
+            recall += simToEachTarget * tfidf;
+            recall_idf_sum += tfidf;
+        }
+
+#ifdef DEBUG_DECISION
+        cout << fmt::format("Node [{}:{}], most similar [{}:{}], sim {}, tfidf {}",
+                                            kb.nodes[node], node,
+                                            kb.nodes[tNodeBest], tNodeBest,
+                                            tNodeSim, 1) << endl;
+#endif
+        precision = tNodeSim;
+        recall = recall / recall_idf_sum;
+    }
+    recall = recall > 0 ? recall : 0;
+    precision = precision > 0 ? precision : 0;
+#ifdef DEBUG_DECISION
+    cout << fmt::format("recall: {}, precision: {}", recall, precision) << endl;
+#endif
+    float betaSquare = beta * beta;
+    return ((1 + betaSquare) * recall * precision) / (recall + betaSquare * precision + 1e-6);
+}
+
+float KnowledgeMatcher::computeNodeCountSum(const std::unordered_map<long, float> &nodeCount) {
+    float sum = 0;
+    for (auto &nc : nodeCount)
+        sum += nc.second;
+    return sum;
+}
+
+float KnowledgeMatcher::computeTfidf(long node, float documentSize, float corpusSize,
+                                     const unordered_map<long, float> &nodeCountInDocument,
+                                     const unordered_map<long, float> &nodeCountInCorpus) {
+    float ncic = 1;
+    if (nodeCountInCorpus.find(node) != nodeCountInCorpus.end())
+        ncic += nodeCountInCorpus.at(node);
+
+    float idf = log(corpusSize / ncic);
 
     float countSum = 0;
-    for (auto &nc : nodeCount)
-        countSum += nc.second;
-    float tf = nodeCount.at(node) / countSum;
+    float tf = nodeCountInDocument.at(node) / documentSize;
     return tf * idf;
 }
 
@@ -1943,7 +1982,6 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
         updatePath(path,
                    visitedSubGraph.coveredCompositeNodes,
                    visitedSubGraph.coveredNodePairs,
-                   visitedSubGraph.sourceToTargetSimilarity,
                    remainingEdges);
         pathRank.emplace_back(make_pair(path.bestSimilarity, path.uncoveredEdges.size()));
     }
@@ -1983,7 +2021,6 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
                     visitedSubGraph.coveredCompositeNodes.insert(tarId);
             }
         }
-        visitedSubGraph.sourceToTargetSimilarity[make_pair(path.root, path.bestSimilarityTarget)] = path.bestSimilarity;
         remainingEdges -= int(addEdges.size());
 
 #ifdef DEBUG_DECISION
@@ -1994,26 +2031,14 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
         cout << "Edges:" << endl;
         for (size_t addEdgeIndex : addEdges) {
             auto &addEdge = kb.edges[addEdgeIndex];
-            if (path.similarityTargets[addEdgeIndex] != -1)
-                cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
-                                    "similarity {} to target [{}:{}]",
-                                    addEdgeIndex,
-                                    kb.nodes[get<0>(addEdge)], get<0>(addEdge),
-                                    kb.relationships[get<1>(addEdge)], get<1>(addEdge),
-                                    kb.nodes[get<2>(addEdge)], get<2>(addEdge),
-                                    edgeToStringAnnotation(addEdgeIndex),
-                                    path.similarities.at(addEdgeIndex),
-                                    kb.nodes[path.similarityTargets[addEdgeIndex]],
-                                    path.similarityTargets.at(addEdgeIndex)) << endl;
-            else
-                cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
-                                    "similarity {}",
-                                    addEdgeIndex,
-                                    kb.nodes[get<0>(addEdge)], get<0>(addEdge),
-                                    kb.relationships[get<1>(addEdge)], get<1>(addEdge),
-                                    kb.nodes[get<2>(addEdge)], get<2>(addEdge),
-                                    edgeToStringAnnotation(addEdgeIndex),
-                                    path.similarities.at(addEdgeIndex)) << endl;
+            cout << fmt::format("{}: [{}:{}] --[{}:{}]--> [{}:{}], annotation [{}], "
+                                "similarity {}",
+                                addEdgeIndex,
+                                kb.nodes[get<0>(addEdge)], get<0>(addEdge),
+                                kb.relationships[get<1>(addEdge)], get<1>(addEdge),
+                                kb.nodes[get<2>(addEdge)], get<2>(addEdge),
+                                edgeToStringAnnotation(addEdgeIndex),
+                                path.similarities.at(addEdgeIndex)) << endl;
         }
         cout << "********************************************************************************" << endl;
 #endif
@@ -2023,7 +2048,6 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
             updatePath(vPath,
                        visitedSubGraph.coveredCompositeNodes,
                        visitedSubGraph.coveredNodePairs,
-                       visitedSubGraph.sourceToTargetSimilarity,
                        remainingEdges);
             pathRank[i] = make_pair(vPath.bestSimilarity, vPath.uncoveredEdges.size());
         }
@@ -2045,13 +2069,11 @@ KnowledgeMatcher::selectPaths(const KnowledgeMatcher::MatchResult &inMatchResult
 
 void KnowledgeMatcher::trimPath(VisitedPath &path) const {
     path.bestSimilarity = 0;
-    path.bestSimilarityTarget = -1;
     size_t trimPosition = 0;
     for (size_t i = 0; i < path.edges.size(); i++) {
         float similarity = path.similarities.at(path.edges[i]);
         if (similarity >= path.bestSimilarity and similarity > 0) {
             path.bestSimilarity = similarity;
-            path.bestSimilarityTarget = path.similarityTargets.at(path.edges[i]);
             trimPosition = i + 1;
         }
     }
@@ -2065,14 +2087,8 @@ void KnowledgeMatcher::trimPath(VisitedPath &path) const {
 void KnowledgeMatcher::updatePath(VisitedPath &path,
                                   const unordered_set<long> &coveredCompositeNodes,
                                   const unordered_set<pair<long, long>, PairHash> &coveredNodePairs,
-                                  const unordered_map<pair<long, long>, float, PairHash> &sourceToTargetSimilarity,
                                   int remainingEdges) const {
-    const float similarityFocusMultiplier = 3;
-    // Only effective for match by token, and doesn't affect bestSimilarityTarget when match by node/embedding
-    float focusMultiplier = pow(similarityFocusMultiplier, float(path.matchedFocusCount));
-
     float bestSimilarity = 0;
-    long bestSimilarityTarget = -1;
     vector<size_t> uncoveredEdges;
     // Only search edges from start that can fit into the remaining Edges
     for (size_t uEdge : path.uncoveredEdges) {
@@ -2091,29 +2107,13 @@ void KnowledgeMatcher::updatePath(VisitedPath &path,
              coveredCompositeNodes.find(srcId) == coveredCompositeNodes.end() &&
              coveredCompositeNodes.find(tarId) == coveredCompositeNodes.end())) {
             uncoveredEdges.emplace_back(uEdge);
-            if (path.similarities.at(uEdge) * focusMultiplier > bestSimilarity) {
-                auto pair = make_pair(path.root, path.similarityTargets.at(uEdge));
-                // Consider a path from some root node R to some target node T
-                // If its similarity is larger than another path from same root
-                // R to target node Tin the covered set
-                // Then make this path the best path from R -> T
-
-                // In the mean time, since a path can be similar to multiple nodes
-                // (or -1 indicating that do not compare to a single node but a group of nodes)
-                // select the most similar target node T* amoung all target nodes {T}
-                bool isBetterThanCurrent = (
-                        sourceToTargetSimilarity.find(pair) == sourceToTargetSimilarity.end() ||
-                        sourceToTargetSimilarity.at(pair) < path.similarities.at(uEdge) * focusMultiplier);
-                if (isBetterThanCurrent or pair.second == -1) {
-                    bestSimilarity = path.similarities.at(uEdge) * focusMultiplier;
-                    bestSimilarityTarget = path.similarityTargets.at(uEdge);
-                }
+            if (path.similarities.at(uEdge) > bestSimilarity) {
+                bestSimilarity = path.similarities.at(uEdge);
             }
             remainingEdges--;
         }
     }
     path.bestSimilarity = bestSimilarity;
-    path.bestSimilarityTarget = bestSimilarityTarget;
     path.uncoveredEdges.swap(uncoveredEdges);
 }
 

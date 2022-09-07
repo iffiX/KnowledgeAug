@@ -1,7 +1,9 @@
 import re
+import tqdm
 import nltk
 import spacy
 import logging
+import multiprocessing as mp
 from typing import List, Dict, Tuple, Union
 from nltk.corpus import stopwords
 from transformers import PreTrainedTokenizerBase
@@ -12,6 +14,7 @@ Tokens = List[int]
 
 
 class BaseMatcher:
+    TOKENIZER_INSTANCE = None
     VERB_FILTER_SET = {
         "do",
         "did",
@@ -219,29 +222,40 @@ class BaseMatcher:
         target_nodes: List[int],
         max_depth: int = 2,
         only_target: bool = False,
-    ) -> Tuple[List[List[str]], List[List[int]], List[List[Edge]]]:
+        filter_composite_nodes_by_f_beta: bool = False,
+        minimum_f_beta: float = 0,
+    ) -> Tuple[List[List[str]], List[List[int]], List[int], List[List[Edge]]]:
         """
         Returns:
             A list containing several sub list of edge annotations,
             each sub list corresponding to a sub path.
             A list of next node ids the path is leading to. If the path ends with 
             a composite node, its component nodes are returned.
+             A list of next node ids the path is leading to.
             A list of sub list of corresponding edges.
         """
         (
             list_of_sub_path_annotation_tokens,
             list_of_sub_path_next_nodes,
+            list_of_sub_path_raw_next_nodes,
             list_of_sub_path_edges,
         ) = self.matcher.find_available_choices(
-            visited_nodes, start_nodes, target_nodes, max_depth, only_target
+            visited_nodes,
+            start_nodes,
+            target_nodes,
+            max_depth,
+            only_target,
+            filter_composite_nodes_by_f_beta,
+            minimum_f_beta,
         )
         return (
             [
-                [self.tokenizer.decode(tokens) for tokens in sub_path_tokens]
+                self.tokenizer.batch_decode(sub_path_tokens)
                 for sub_path_tokens in list_of_sub_path_annotation_tokens
             ],
             # self.sub_paths_to_annotations(list_of_sub_path_edges, "standard_no_symbol"),
             list_of_sub_path_next_nodes,
+            list_of_sub_path_raw_next_nodes,
             list_of_sub_path_edges,
         )
 
@@ -479,6 +493,30 @@ class BaseMatcher:
         knowledge_tokens += end_tokens
         return sentence + " " + self.tokenizer.decode(knowledge_tokens)
 
+    def parallel_tokenize_and_mask(
+        self,
+        sentences: List[str],
+        sentence_masks: List[str] = None,
+        mask_stopwords: bool = False,
+    ):
+        """
+        Parallel version of tokenize_and_mask
+        """
+        sentence_masks = sentence_masks or [""] * len(sentences)
+        mask_stopwords = [mask_stopwords] * len(sentences)
+        result = {}
+        with mp.Pool(
+            initializer=self._parallel_tokenize_and_mask_intialize_pool,
+            initargs=(self.tokenizer,),
+        ) as pool, tqdm.tqdm(total=len(sentences)) as pbar:
+            for sentence, ids_and_mask in pool.imap_unordered(
+                self._parallel_tokenize_and_mask,
+                zip(sentences, sentence_masks, mask_stopwords),
+            ):
+                pbar.update()
+                result[sentence] = ids_and_mask
+        return [result[sentence] for sentence in sentences]
+
     def tokenize_and_mask(
         self, sentence: str, sentence_mask: str = "", mask_stopwords: bool = False
     ):
@@ -493,6 +531,30 @@ class BaseMatcher:
             A list of token ids.
             A list of POS mask.
         """
+        return self._tokenize_and_mask(
+            self.tokenizer, sentence, sentence_mask, mask_stopwords
+        )
+
+    @staticmethod
+    def _parallel_tokenize_and_mask_intialize_pool(tokenizer):
+        BaseMatcher.TOKENIZER_INSTANCE = tokenizer
+
+    @staticmethod
+    def _parallel_tokenize_and_mask(args):
+        sentence, sentence_mask, mask_stopwords = args
+        return (
+            sentence,
+            BaseMatcher._tokenize_and_mask(
+                BaseMatcher.TOKENIZER_INSTANCE, sentence, sentence_mask, mask_stopwords
+            ),
+        )
+
+    @staticmethod
+    def _tokenize_and_mask(
+        tokenizer, sentence: str, sentence_mask: str = "", mask_stopwords: bool = False
+    ):
+        if len(sentence) == 0:
+            return [], []
         use_mask = False
         if len(sentence_mask) != 0:
             mask_characters = set(sentence_mask)
@@ -514,12 +576,12 @@ class BaseMatcher:
         masks = []
         ids = []
         allowed_tokens = []
-        for token, pos in self.safe_pos_tag(tokens):
+        for token, pos in BaseMatcher.safe_pos_tag(tokens):
             token_position = sentence.find(token, offset)
             offset = token_position + len(token)
 
             # Relaxed matching, If any part is not masked, allow searching for that part
-            ids.append(self.tokenizer.encode(token, add_special_tokens=False))
+            ids.append(tokenizer.encode(token, add_special_tokens=False))
             if (
                 (not use_mask or "+" in set(sentence_mask[token_position:offset]))
                 and (
@@ -528,11 +590,11 @@ class BaseMatcher:
                     or pos.startswith("RB")
                     or (
                         pos.startswith("VB")
-                        and token.lower() not in self.VERB_FILTER_SET
+                        and token.lower() not in BaseMatcher.VERB_FILTER_SET
                     )
                     or pos.startswith("CD")
                 )
-                and (not mask_stopwords or token not in self.STOPWORDS_SET)
+                and (not mask_stopwords or token not in BaseMatcher.STOPWORDS_SET)
             ):
                 allowed_tokens.append(token)
                 # noun, adjective, adverb, verb
