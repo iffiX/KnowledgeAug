@@ -154,7 +154,7 @@ public:
 
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
 
-    void addCompositeNode(const std::string &compositeNode,
+    long addCompositeNode(const std::string &compositeNode,
                           const std::string &relationship,
                           const std::vector<int> &tokenizedCompositeNode,
                           const std::vector<int> &mask = {},
@@ -162,7 +162,7 @@ public:
                           size_t splitNodeMinimumEdgeNum = 20,
                           float splitNodeMinimumSimilarity = 0.35);
 
-    void addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId);
+    size_t addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId);
 
     void setNodeEmbeddingFileName(const std::string &path);
 
@@ -273,6 +273,7 @@ public:
     ChoiceResult findAvailableChoices(const std::vector<long> &visitedNodes,
                                       const std::vector<long> &startNodes,
                                       const std::vector<long> &targetNodes,
+                                      const std::vector<long> &allowedCompositeNodes = {},
                                       int maxDepth = 2,
                                       bool onlyTarget = false,
                                       bool filterCompositeNodesByFBeta = false,

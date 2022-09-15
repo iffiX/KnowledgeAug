@@ -221,6 +221,63 @@ class QASC:
         return self
 
 
+class CommonsenseQA2:
+    COMMONSENSE_QA2_TRAIN_URL = (
+        "https://github.com/allenai/csqa2/raw/master/dataset/CSQA2_train.json.gz"
+    )
+    COMMONSENSE_QA2_VALIDATE_URL = (
+        "https://github.com/allenai/csqa2/raw/master/dataset/CSQA2_dev.json.gz"
+    )
+    COMMONSENSE_QA2_TEST_URL = (
+        "https://github.com/allenai/csqa2/raw/master/"
+        "dataset/CSQA2_test_no_answers.json.gz"
+    )
+
+    def __init__(self):
+        commonsense_qa2_path = str(os.path.join(dataset_cache_dir, "commonsense_qa2"))
+        self.train_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "train_complete.jsonl",
+        )
+        self.validate_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "dev_complete.jsonl",
+        )
+        self.test_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "test_complete.jsonl",
+        )
+        self.facts_path = os.path.join(
+            openbook_qa_path, "OpenBookQA-V1-Sep2018", "Data", "Main", "openbook.txt"
+        )
+        self.crowd_source_facts_path = os.path.join(
+            openbook_qa_path,
+            "OpenBookQA-V1-Sep2018",
+            "Data",
+            "Additional",
+            "crowdsourced-facts.txt",
+        )
+
+    def require(self):
+        openbook_qa_path = str(os.path.join(dataset_cache_dir, "openbook_qa"))
+        if not os.path.exists(openbook_qa_path):
+            if not os.path.exists(str(openbook_qa_path) + ".zip"):
+                logging.info("Downloading OpenBook QA")
+                download_to(self.OPENBOOK_QA_URL, str(openbook_qa_path) + ".zip")
+            logging.info("Decompressing")
+            decompress_zip(str(openbook_qa_path) + ".zip", openbook_qa_path)
+        return self
+
+
 class UnifiedQAIR:
     UNIFIEDQA_IR_URL = (
         "https://github.com/allenai/unifiedqa/raw/master/files/"

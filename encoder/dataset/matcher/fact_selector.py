@@ -146,14 +146,14 @@ class FactSelector:
         self.selected_facts = [
             [self.facts[r] for r in qr if r != -1] for qr in query_rank_of_facts[0]
         ]
-        self.selected_facts_rank = [
-            [
-                (int(query_rank_of_facts[0][i][j]), float(query_rank_of_facts[1][i][j]))
-                for j in range(self.max_facts)
-                if query_rank_of_facts[0][i][j] != -1
-            ]
-            for i in range(len(self.queries))
-        ]
+        # self.selected_facts_rank = [
+        #     [
+        #         (int(query_rank_of_facts[0][i][j]), float(query_rank_of_facts[1][i][j]))
+        #         for j in range(self.max_facts)
+        #         if query_rank_of_facts[0][i][j] != -1
+        #     ]
+        #     for i in range(len(self.queries))
+        # ]
 
     def update_rank(self, batch_start, query_rank_of_facts, score):
         # First select top_max_facts number of facts for each query
@@ -176,15 +176,13 @@ class FactSelector:
         return new_query_rank_of_facts
 
     def compute_embeddings(self, strings, chunk_size: int = 128):
-        embeddings = t.cat(
-            self.parallel_run(
-                [
-                    strings[split_start : split_start + chunk_size]
-                    for split_start in range(0, len(strings), chunk_size)
-                ],
-            ),
-            dim=0,
+        embeddings = self.parallel_run(
+            [
+                strings[split_start : split_start + chunk_size]
+                for split_start in range(0, len(strings), chunk_size)
+            ],
         )
+
         return embeddings
 
     @staticmethod
@@ -224,19 +222,19 @@ class FactSelector:
         if self.process_context is None:
             raise RuntimeError("Process pool not initialized")
         process_num = len(self.process_context.processes)
-        chunk_size = max((len(inputs) + process_num - 1) // process_num, 1)
+        per_process_chunks = max((len(inputs) + process_num - 1) // process_num, 1)
 
         for worker_id, split_start in zip(
-            range(process_num), range(0, len(inputs), chunk_size),
+            range(process_num), range(0, len(inputs), per_process_chunks),
         ):
             self.process_input_queues[worker_id].put(
-                inputs[split_start : split_start + chunk_size]
+                inputs[split_start : split_start + per_process_chunks]
             )
         results = [
             self.process_output_queues[worker_id].get()
             for worker_id in range(process_num)
         ]
-        return [rr for r in results for rr in r]
+        return t.cat(results, dim=0)
 
     def initialize_processes(
         self, func, process_num=None, initializer=None, initargs=None,
@@ -293,8 +291,15 @@ class FactSelector:
                             if res is not None:
                                 result.append(res)
                             bar.update(worker_num)
-                        output_queue.put(result)
+                        output_queue.put(t.cat(result, dim=0))
                 else:
                     output_queue.put(
-                        [x for x in [func(inp) for inp in func_input] if x is not None],
+                        t.cat(
+                            [
+                                x
+                                for x in [func(inp) for inp in func_input]
+                                if x is not None
+                            ],
+                            dim=0,
+                        ),
                     )

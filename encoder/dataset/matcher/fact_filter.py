@@ -76,7 +76,7 @@ class FactFilter:
 
         pass
 
-    def clean(self, facts):
+    def clean(self, facts, remove_incomplete_sentences=True):
         f = self.basic_clean(facts)
         f = self.remove_html_characters(f)
         f = self.replace_brackets_of_all_shapes_at_start(f)
@@ -86,7 +86,8 @@ class FactFilter:
         f = self.remove_questions(f)
         f = self.remove_facts_with_choices(f)
         f = self.remove_short_or_high_non_word_ratio_facts(f)
-        f = self.remove_incomplete_sentences(f)
+        if remove_incomplete_sentences:
+            f = self.remove_incomplete_sentences(f)
         # f = self.remove_non_neutral_sentences(f)
         f = self.replace_annotation_parenthesis_and_remove_single_brackets_of_all_shapes(
             f

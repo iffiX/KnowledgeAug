@@ -327,7 +327,7 @@ vector<string> KnowledgeBase::getNodes(const vector<long> &nodeIndexes) const {
     return result;
 }
 
-void KnowledgeBase::addCompositeNode(const string &compositeNode,
+long KnowledgeBase::addCompositeNode(const string &compositeNode,
                                      const string &relationship,
                                      const vector<int> &tokenizedCompositeNode,
                                      const vector<int> &mask,
@@ -432,9 +432,10 @@ void KnowledgeBase::addCompositeNode(const string &compositeNode,
     }
     compositeNodes.emplace(newNodeId, components);
     nodeToIndex[compositeNode] = newNodeId;
+    return newNodeId;
 }
 
-void KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId) {
+size_t KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long compositeNodeId) {
     if (sourceNodeId < 0 || sourceNodeId >= nodes.size())
         throw invalid_argument(fmt::format("Invalid source node {}", sourceNodeId));
     if (compositeNodeId < 0 || compositeNodeId >= nodes.size() || not isNodeComposite[compositeNodeId])
@@ -453,6 +454,7 @@ void KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long co
                         nodes[compositeNodeId], compositeNodeId,
                         relationships[relationId], relationId) << endl;
 #endif
+    return edgeIndex;
 }
 
 void KnowledgeBase::setNodeEmbeddingFileName(const string &path) {
@@ -910,6 +912,14 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
         for (auto &node : rank)
             startNodes.push_back(node.first);
 
+        bool reached = false;
+        for (long startNode : startNodes) {
+            if (searchIds[level + 1].find(startNode) != searchIds[level + 1].end()) {
+                reached = true;
+                break;
+            }
+        }
+
 
         // Note: currently, if several levels share the same start nodes, they are not deduplicated
 #ifdef DEBUG_DECISION
@@ -917,7 +927,12 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
         for (long node : startNodes)
             cout << fmt::format("({}) {}, ", node, kb.nodes[node]);
         cout << endl;
+        if (reached)
+            cout << "Target node reached" << endl;
 #endif
+        if (reached)
+            break;
+
         for (long startNode : startNodes) {
             vector<bool> visited(kb.nodes.size(), false);
             // Prevent cycles
@@ -942,12 +957,15 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
             for (step = 0; step < bestLevelDepth; step++) {
                 unordered_set<long> newVisitedNodes;
                 for (long lastNode : lastStepVisitedNodes) {
-                    auto neighbors = kb.getNodeNeighbors(lastNode);
-                    for (long neighbor : neighbors) {
-                        // If the neighbor node is only visited in the current step
-                        if (not visited[neighbor]) {
-                            previousNodes[neighbor].push_back(lastNode);
-                            newVisitedNodes.insert(neighbor);
+                    // Forbid exploration after composite nodes
+                    if (not kb.isNodeComposite[lastNode]) {
+                        auto neighbors = kb.getNodeNeighbors(lastNode);
+                        for (long neighbor : neighbors) {
+                            // If the neighbor node is only visited in the current step
+                            if (not visited[neighbor]) {
+                                previousNodes[neighbor].push_back(lastNode);
+                                newVisitedNodes.insert(neighbor);
+                            }
                         }
                     }
                 }
@@ -1107,6 +1125,7 @@ KnowledgeMatcher::ChoiceResult
 KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                                        const std::vector<long> &startNodes,
                                        const std::vector<long> &targetNodes,
+                                       const std::vector<long> &allowedCompositeNodes,
                                        int maxDepth,
                                        bool onlyTarget,
                                        bool filterCompositeNodesByFBeta,
@@ -1126,6 +1145,9 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
 
     ChoiceResult result;
     unordered_set<long> targetNodesSet(targetNodes.begin(), targetNodes.end());
+    vector<bool> allowedCompositeNodesIndex(kb.nodes.size(), false);
+    for (long allowedCompositeNode : allowedCompositeNodes)
+        allowedCompositeNodesIndex[allowedCompositeNode] = true;
     unordered_map<pair<long, long>, float, PairHash> similarityCache;
     unordered_map<long, float> context;
 
@@ -1156,7 +1178,10 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                     auto neighbors = kb.getNodeNeighbors(lastNode);
                     for (long neighbor : neighbors) {
                         // If the neighbor node is only visited in the current step
-                        if (not visited[neighbor]) {
+                        if (not visited[neighbor] and
+                            (not kb.isNodeComposite[neighbor]
+                             or allowedCompositeNodes.empty()
+                             or allowedCompositeNodesIndex[neighbor])) {
                             previousNodes[neighbor].push_back(lastNode);
                             newVisitedNodes.insert(neighbor);
                         }
@@ -1197,6 +1222,7 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                 if (visited[node] and kb.isNodeComposite[node]
                     and previousNodes.find(node) != previousNodes.end()
                     and targetNodesSet.find(node) == targetNodesSet.end()
+                    and (allowedCompositeNodes.empty() or allowedCompositeNodesIndex[node])
                     and (not filterCompositeNodesByFBeta
                          or computeFBetaScoreWithCache(node, context, similarityCache, 2) > minimumFBeta))
                     unvisited.push(make_pair(node, vector<long>{node}));

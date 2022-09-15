@@ -1,10 +1,10 @@
 {
     "configs": [
         {
-            "base_type": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+            "base_type": "microsoft/deberta-v3-large",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 15,
+            "negative_samples": 31,
             "learning_rate": 5e-6,
             "inference_batch_size": 128,
             "load": false,
@@ -19,7 +19,7 @@
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_inference_num": 60000, "min_logits": -2, "beam_size": 5, "inference_batch_size": 1024}},
+    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 10}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [

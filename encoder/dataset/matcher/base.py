@@ -220,6 +220,7 @@ class BaseMatcher:
         visited_nodes: List[int],
         start_nodes: List[int],
         target_nodes: List[int],
+        allowed_composite_nodes: List[int] = None,
         max_depth: int = 2,
         only_target: bool = False,
         filter_composite_nodes_by_f_beta: bool = False,
@@ -234,6 +235,7 @@ class BaseMatcher:
              A list of next node ids the path is leading to.
             A list of sub list of corresponding edges.
         """
+        allowed_composite_nodes = allowed_composite_nodes or []
         (
             list_of_sub_path_annotation_tokens,
             list_of_sub_path_next_nodes,
@@ -243,6 +245,7 @@ class BaseMatcher:
             visited_nodes,
             start_nodes,
             target_nodes,
+            allowed_composite_nodes,
             max_depth,
             only_target,
             filter_composite_nodes_by_f_beta,

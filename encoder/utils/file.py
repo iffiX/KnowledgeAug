@@ -118,6 +118,23 @@ class SafeCacheBase:
         pass
 
 
+class RawTextCache(SafeCacheBase):
+    def load(self, path, validate_func):
+        try:
+            with open(path, "r") as file:
+                data = [line.strip("\n") for line in file]
+        except:
+            return None
+        if not validate_func(data):
+            return None
+        return data
+
+    def save(self, data, path):
+        with open(path, "w") as file:
+            for line in data:
+                file.write(line + "\n")
+
+
 class JSONCache(SafeCacheBase):
     def load(self, path, validate_func):
         try:

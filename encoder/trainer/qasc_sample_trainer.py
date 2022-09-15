@@ -22,8 +22,8 @@ from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.qasc import QASCBaseDataset
 from encoder.dataset.sample import (
-    RewardPredictorDataset,
-    RewardPredictorBestFirstBeamSearchDatasetWithFilter,
+    QASCRewardPredictorDataset,
+    QASCRewardPredictorBestFirstBeamSearchDataset,
 )
 from encoder.utils.config import QASCSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
@@ -100,10 +100,11 @@ class QASCSampleTrainer(pl.LightningModule):
         # )
 
         self.reward_predictor_datasets = {
-            split: RewardPredictorDataset(
+            split: QASCRewardPredictorDataset(
                 f"qasc_{split}",
                 [
                     (
+                        d["id"],
                         d["text_question"],
                         d["text_choices"],
                         d["text_answer"],
@@ -267,6 +268,21 @@ class QASCSampleTrainer(pl.LightningModule):
             sorted_outputs = [o[1][:-1] for o in sorted(outputs, key=lambda o: o[0])]
             for id, paths, path_edges in sorted_outputs:
                 result[id] = (paths, path_edges)
+
+            for split_name, split in zip(
+                ("train", "validate"),
+                (self.dataset.train_data, self.dataset.validate_data),
+            ):
+                total, count = 0, 0
+                for data in split:
+                    if data["id"] in result:
+                        total += 1
+                        for fact in data["original_facts"]:
+                            for path in result[data["id"]][0]:
+                                if fact in " ".join(path):
+                                    count += 1
+                                    break
+                print(f"Average retrieval length of {split_name}: {count / total}")
             with open(
                 os.path.join(preprocess_cache_dir, "qasc_sample_result.json"), "w",
             ) as file:
@@ -317,20 +333,20 @@ class QASCSampleTrainer(pl.LightningModule):
 
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
-            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
-                # [
-                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
-                #     for d in getattr(self.dataset, f"{split}_data")
-                # ][:520]
-                # if split == "train"
-                # else [
-                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
-                #     for d in getattr(self.dataset, f"{split}_data")
-                # ][:2],
+            dataset=QASCRewardPredictorBestFirstBeamSearchDataset(
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"{split}_data")
                 ],
+                # [
+                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
+                #     for d in getattr(self.dataset, f"{split}_data")
+                # ][:1]
+                # if split in ("train", "test")
+                # else [
+                #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
+                #     for d in getattr(self.dataset, f"{split}_data")
+                # ][:20],
                 self.reward_predictor,
                 self.dataset.matcher,
                 existing_ids=set(self.test_result.keys()),

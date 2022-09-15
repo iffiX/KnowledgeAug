@@ -127,6 +127,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("visited_nodes"),
                  py::arg("start_nodes"),
                  py::arg("target_nodes"),
+                 py::arg("allowed_composite_nodes") = std::vector<long>{},
                  py::arg("max_depth") = 2,
                  py::arg("only_target") = false,
                  py::arg("filter_composite_nodes_by_f_beta") = false,

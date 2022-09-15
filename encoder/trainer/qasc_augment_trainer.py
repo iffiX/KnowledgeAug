@@ -302,7 +302,7 @@ class QASCAugmentTrainer(pl.LightningModule):
                     raw_paths = [
                         flatten_sublists(
                             dataset.matcher.sub_paths_to_annotations(
-                                x,  # [:-1],
+                                x[:2],
                                 templates="standard",
                                 prioritize_original_annotation=True,
                             )
