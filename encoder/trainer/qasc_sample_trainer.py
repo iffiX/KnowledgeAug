@@ -22,6 +22,7 @@ from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.qasc import QASCBaseDataset
 from encoder.dataset.sample import (
+    RewardPredictorDatasetCreatorWithFilter,
     QASCRewardPredictorDataset,
     QASCRewardPredictorBestFirstBeamSearchDataset,
 )
@@ -337,7 +338,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"{split}_data")
-                ],
+                ][:20],
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")

@@ -275,14 +275,28 @@ class QASCMatcher(BaseMatcher):
                     sub_queries = []
                     for fact_keywords in keywords["facts"]:
                         for choice_keywords in keywords["choices"]:
+                            # order = (
+                            #     keywords["question"] + choice_keywords + fact_keywords
+                            # )
+                            # first_set = set(keywords["question"] + choice_keywords)
+                            # second_set = set(fact_keywords)
+                            # unordered_query_keywords = first_set.union(
+                            #     second_set
+                            # ).difference(first_set.intersection(second_set))
+
                             order = (
-                                keywords["question"] + choice_keywords + fact_keywords
+                                keywords["question"] + fact_keywords + choice_keywords
                             )
-                            first_set = set(keywords["question"] + choice_keywords)
-                            second_set = set(fact_keywords)
-                            unordered_query_keywords = first_set.union(
+                            first_set = set(keywords["question"]).union(
+                                set(fact_keywords)
+                            )
+                            second_set = set(keywords["question"]).intersection(
+                                set(fact_keywords)
+                            )
+                            unordered_query_keywords = first_set.difference(
                                 second_set
-                            ).difference(first_set.intersection(second_set))
+                            ).union(choice_keywords)
+
                             unordered_query_keywords = [
                                 (k, order.index(k)) for k in unordered_query_keywords
                             ]
@@ -300,7 +314,7 @@ class QASCMatcher(BaseMatcher):
                 fact_selector = FactSelector(
                     [q for sub_q in queries for q in sub_q],
                     filtered_facts,
-                    min_score=0.55,
+                    min_score=0.6,
                     inner_batch_size=2048,
                 )
                 selected_facts = [[] for _ in range(len(first_level_keywords))]
@@ -328,7 +342,7 @@ class QASCMatcher(BaseMatcher):
                             .strip("'")
                             .strip(",")
                             .lower()
-                            for f in facts[:40]
+                            for f in facts[:50]
                         ]
             facts = set(f for facts in allowed_facts for f in facts)
             self.added_qasc_corpus_facts = facts

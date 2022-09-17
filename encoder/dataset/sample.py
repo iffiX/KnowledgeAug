@@ -877,6 +877,6 @@ class QASCRewardPredictorBestFirstBeamSearchDataset(
             current_reached_nodes,
             target_nodes,
             allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
+            only_target=length == self.max_steps - 1 and self.max_steps > 1,
             max_depth=self.max_depth,
-            only_target=False,
         )

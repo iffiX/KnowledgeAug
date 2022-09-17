@@ -8,10 +8,21 @@ import logging
 import numpy as np
 import torch as t
 from typing import List, Tuple, Dict, Union
-from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
+from transformers import (
+    AutoModel,
+    AutoTokenizer,
+    PreTrainedTokenizerBase,
+    BatchEncoding,
+)
 from encoder.dataset.download import QASC
 from encoder.dataset.matcher.qasc import QASCMatcher
-from encoder.utils.settings import preprocess_cache_dir
+from encoder.utils.settings import (
+    preprocess_cache_dir,
+    model_cache_dir,
+    local_files_only,
+    proxies,
+    huggingface_mirror,
+)
 from encoder.utils.file import PickleCache, open_file_with_create_directories
 from .base import StaticIterableDataset
 from .utils import normalize_t5_input
@@ -206,10 +217,79 @@ class QASCBaseDataset:
 
     def generate_data(self):
         return {
-            "train": self.parse_data(self.commonsense_qa.train_path, "train"),
-            "validate": self.parse_data(self.commonsense_qa.validate_path, "validate"),
+            "train": self.sort_facts(
+                self.parse_data(self.commonsense_qa.train_path, "train")
+            ),
+            "validate": self.sort_facts(
+                self.parse_data(self.commonsense_qa.validate_path, "validate")
+            ),
             "test": self.parse_data(self.commonsense_qa.test_path, "test"),
         }
+
+    def sort_facts(self, split_data):
+        import torch
+        import torch.nn.functional as F
+
+        def mean_pooling(model_output, attention_mask):
+            token_embeddings = model_output[
+                0
+            ]  # First element of model_output contains all token embeddings
+            input_mask_expanded = (
+                attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+            )
+            return torch.sum(token_embeddings * input_mask_expanded, 1) / torch.clamp(
+                input_mask_expanded.sum(1), min=1e-9
+            )
+
+        model = AutoModel.from_pretrained(
+            "sentence-transformers/all-mpnet-base-v2",
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+            local_files_only=local_files_only,
+        ).to(f"cuda:0")
+        model.eval()
+        tokenizer = AutoTokenizer.from_pretrained(
+            "sentence-transformers/all-mpnet-base-v2",
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+            local_files_only=local_files_only,
+        )
+
+        questions = [d["text_question"] for d in split_data]
+        facts_1 = [d["original_facts"][0] for d in split_data]
+        facts_2 = [d["original_facts"][1] for d in split_data]
+        embeddings = []
+        for sentences in (questions, facts_1, facts_2):
+            encoded_input = tokenizer(
+                sentences, padding=True, truncation=True, return_tensors="pt"
+            )
+            with torch.no_grad():
+                model_output = model(**encoded_input.to("cuda:0"))
+            sentence_embeddings = mean_pooling(
+                model_output, encoded_input["attention_mask"]
+            )
+            sentence_embeddings = F.normalize(sentence_embeddings, p=2, dim=1)
+            embeddings.append(sentence_embeddings)
+        facts_1_similarity = torch.sum(embeddings[0] * embeddings[1], dim=1)
+        facts_2_similarity = torch.sum(embeddings[0] * embeddings[2], dim=1)
+        facts_1_first = facts_1_similarity > facts_2_similarity
+        for data, is_first in zip(split_data, facts_1_first):
+            if not is_first:
+                data["original_facts"] = [
+                    data["original_facts"][1],
+                    data["original_facts"][0],
+                ]
+                if len(data["facts"]) > 0:
+                    data["facts"] = [data["facts"][1], data["facts"][0]]
+                print(
+                    f"Reversed: "
+                    f"question: {data['text_question']} ||| "
+                    f"new_fact1: {data['original_facts'][0]} ||| "
+                    f"new_fact2: {data['original_facts'][1]}"
+                )
+        return split_data
 
     def parse_data(self, path, split):
         data = []

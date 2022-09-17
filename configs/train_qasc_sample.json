@@ -1,14 +1,14 @@
 {
     "configs": [
         {
-            "base_type": "microsoft/deberta-v3-large",
+            "base_type": "microsoft/deberta-v3-small",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 31,
+            "negative_samples": 63,
             "learning_rate": 5e-6,
-            "inference_batch_size": 128,
+            "inference_batch_size": 256,
             "load": false,
-            "max_seq_length": 200,
+            "max_seq_length": 256,
             "pad_by_longest": true,
             "min_logits": -2,
             "max_steps": 3,
@@ -19,7 +19,7 @@
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 10}},
+    "override_saved_config": {"0": {"max_steps": 3, "beam_size": 10}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
