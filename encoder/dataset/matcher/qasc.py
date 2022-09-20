@@ -4,13 +4,16 @@ import json
 import nltk
 import pickle
 import logging
+import torch as t
 from tqdm import tqdm
+from sklearn.cluster import DBSCAN
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.download import ConceptNetWithGloVe, OpenBookQA, QASC
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
 from encoder.utils.file import RawTextCache, JSONCache, PickleCache
 from encoder.utils.settings import preprocess_cache_dir
+from .embedder import Embedder
 from .fact_filter import FactFilter
 from .fact_selector import FactSelector
 
@@ -58,7 +61,7 @@ class QASCMatcher(BaseMatcher):
         super(QASCMatcher, self).__init__(tokenizer, matcher)
 
         self.matcher.kb.disable_edges_with_weight_below(1)
-        self.matcher.kb.disable_edges_of_relationships(["RelatedTo"])
+        self.matcher.kb.disable_edges_of_relationships(["RelatedTo", "HasContext"])
 
         self.composite_node_index = {}
         self.reverse_composite_node_index = {}
@@ -66,6 +69,7 @@ class QASCMatcher(BaseMatcher):
 
         self.added_qasc_corpus_facts = None
         self.add_qasc_corpus()
+        self.update_allowed_composite_nodes_by_question_cluster()
         self.validate_qasc_corpus_retrieval_rate()
 
     def add_qasc_facts(self, train_and_validate=False):
@@ -139,7 +143,7 @@ class QASCMatcher(BaseMatcher):
                 ]
         logging.info(f"Added {count} composite nodes")
 
-    def add_qasc_corpus(self):
+    def add_qasc_corpus(self, level=1):
         logging.info("Adding QASC corpus")
 
         if not os.path.exists(
@@ -182,7 +186,9 @@ class QASCMatcher(BaseMatcher):
                 filtered_facts = cache.data
 
             def generate_first_level_facts():
-                fact_selector = FactSelector(questions, filtered_facts, min_score=0.55)
+                fact_selector = FactSelector(
+                    questions, filtered_facts, min_score=0.4, max_facts=1000
+                )
                 return {
                     "queries": questions,
                     "query_facts": fact_selector.selected_facts,
@@ -203,147 +209,155 @@ class QASCMatcher(BaseMatcher):
                             .strip("'")
                             .strip(",")
                             .lower()
-                            for f in facts[:50]
+                            for f in facts[:500]
                         ]
                     )
                 first_level_top_facts = [
                     facts[:10] for facts in cache.data["query_facts"]
                 ]
 
-            def generate_first_level_keywords():
-                first_level_keywords = []
-                lemma = nltk.wordnet.WordNetLemmatizer()
-                for question, facts, choices in tqdm(
-                    zip(questions, first_level_top_facts, list_of_choices),
-                    total=len(questions),
-                ):
-                    (
-                        question_keywords,
-                        list_of_fact_keywords,
-                        list_of_choice_keywords,
-                    ) = (
-                        [],
-                        [[] for _ in range(len(facts))],
-                        [[] for _ in range(len(choices))],
-                    )
+            if level == 2:
 
-                    for sentence, keywords in zip(
-                        (question, *facts, *choices),
+                def generate_first_level_keywords():
+                    first_level_keywords = []
+                    lemma = nltk.wordnet.WordNetLemmatizer()
+                    for question, facts, choices in tqdm(
+                        zip(questions, first_level_top_facts, list_of_choices),
+                        total=len(questions),
+                    ):
                         (
                             question_keywords,
-                            *list_of_fact_keywords,
-                            *list_of_choice_keywords,
-                        ),
-                    ):
-                        added = set()
-                        tokens = nltk.word_tokenize(sentence)
-                        for token, pos in BaseMatcher.safe_pos_tag(tokens):
-                            if (
-                                pos.startswith("NN")
-                                or pos.startswith("JJ")
-                                or (
-                                    pos.startswith("VB")
-                                    and token.lower() not in BaseMatcher.VERB_FILTER_SET
+                            list_of_fact_keywords,
+                            list_of_choice_keywords,
+                        ) = (
+                            [],
+                            [[] for _ in range(len(facts))],
+                            [[] for _ in range(len(choices))],
+                        )
+
+                        for sentence, keywords in zip(
+                            (question, *facts, *choices),
+                            (
+                                question_keywords,
+                                *list_of_fact_keywords,
+                                *list_of_choice_keywords,
+                            ),
+                        ):
+                            added = set()
+                            tokens = nltk.word_tokenize(sentence)
+                            for token, pos in BaseMatcher.safe_pos_tag(tokens):
+                                if (
+                                    pos.startswith("NN")
+                                    or pos.startswith("JJ")
+                                    or (
+                                        pos.startswith("VB")
+                                        and token.lower()
+                                        not in BaseMatcher.VERB_FILTER_SET
+                                    )
+                                ):
+                                    lem_token = lemma.lemmatize(token.lower())
+                                    if lem_token not in self.STOPWORDS_SET:
+                                        if lem_token not in added:
+                                            added.add(lem_token)
+                                            keywords.append(lem_token)
+                        first_level_keywords.append(
+                            {
+                                "question": question_keywords,
+                                "facts": list_of_fact_keywords,
+                                "choices": list_of_choice_keywords,
+                            }
+                        )
+                    return first_level_keywords
+
+                with JSONCache(
+                    os.path.join(
+                        preprocess_cache_dir, "qasc_matcher_first_level_keywords.json"
+                    ),
+                    generate_first_level_keywords,
+                ) as cache:
+                    first_level_keywords = cache.data
+
+                def generate_second_level_facts():
+                    queries = []
+                    query_indices = []
+                    for idx, keywords in enumerate(first_level_keywords):
+                        sub_queries = []
+                        for fact_keywords in keywords["facts"]:
+                            for choice_keywords in keywords["choices"]:
+                                # order = (
+                                #     keywords["question"] + choice_keywords + fact_keywords
+                                # )
+                                # first_set = set(keywords["question"] + choice_keywords)
+                                # second_set = set(fact_keywords)
+                                # unordered_query_keywords = first_set.union(
+                                #     second_set
+                                # ).difference(first_set.intersection(second_set))
+
+                                order = (
+                                    keywords["question"]
+                                    + fact_keywords
+                                    + choice_keywords
                                 )
-                            ):
-                                lem_token = lemma.lemmatize(token.lower())
-                                if lem_token not in self.STOPWORDS_SET:
-                                    if lem_token not in added:
-                                        added.add(lem_token)
-                                        keywords.append(lem_token)
-                    first_level_keywords.append(
-                        {
-                            "question": question_keywords,
-                            "facts": list_of_fact_keywords,
-                            "choices": list_of_choice_keywords,
-                        }
+                                first_set = set(keywords["question"]).union(
+                                    set(fact_keywords)
+                                )
+                                second_set = set(keywords["question"]).intersection(
+                                    set(fact_keywords)
+                                )
+                                unordered_query_keywords = first_set.difference(
+                                    second_set
+                                ).union(choice_keywords)
+
+                                unordered_query_keywords = [
+                                    (k, order.index(k))
+                                    for k in unordered_query_keywords
+                                ]
+                                ordered_query_keywords = [
+                                    k[0]
+                                    for k in sorted(
+                                        unordered_query_keywords, key=lambda k: k[1]
+                                    )
+                                ]
+                                base_query = " ".join(ordered_query_keywords)
+                                sub_queries.append(base_query)
+                                query_indices.append(idx)
+                        queries.append(sub_queries)
+
+                    fact_selector = FactSelector(
+                        [q for sub_q in queries for q in sub_q],
+                        filtered_facts,
+                        min_score=0.6,
+                        inner_batch_size=2048,
                     )
-                return first_level_keywords
+                    selected_facts = [[] for _ in range(len(first_level_keywords))]
+                    for idx, list_of_facts in zip(
+                        query_indices, fact_selector.selected_facts
+                    ):
+                        selected_facts[idx].append(list_of_facts)
+                    return {
+                        "list_of_queries": queries,
+                        "list_of_query_facts": selected_facts,
+                    }
 
-            with JSONCache(
-                os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_first_level_keywords.json"
-                ),
-                generate_first_level_keywords,
-            ) as cache:
-                first_level_keywords = cache.data
-
-            def generate_second_level_facts():
-                queries = []
-                query_indices = []
-                for idx, keywords in enumerate(first_level_keywords):
-                    sub_queries = []
-                    for fact_keywords in keywords["facts"]:
-                        for choice_keywords in keywords["choices"]:
-                            # order = (
-                            #     keywords["question"] + choice_keywords + fact_keywords
-                            # )
-                            # first_set = set(keywords["question"] + choice_keywords)
-                            # second_set = set(fact_keywords)
-                            # unordered_query_keywords = first_set.union(
-                            #     second_set
-                            # ).difference(first_set.intersection(second_set))
-
-                            order = (
-                                keywords["question"] + fact_keywords + choice_keywords
-                            )
-                            first_set = set(keywords["question"]).union(
-                                set(fact_keywords)
-                            )
-                            second_set = set(keywords["question"]).intersection(
-                                set(fact_keywords)
-                            )
-                            unordered_query_keywords = first_set.difference(
-                                second_set
-                            ).union(choice_keywords)
-
-                            unordered_query_keywords = [
-                                (k, order.index(k)) for k in unordered_query_keywords
+                with JSONCache(
+                    os.path.join(
+                        preprocess_cache_dir, "qasc_matcher_second_level_facts.json"
+                    ),
+                    generate_second_level_facts,
+                ) as cache:
+                    for idx, list_of_facts in enumerate(
+                        cache.data["list_of_query_facts"]
+                    ):
+                        for facts in list_of_facts:
+                            allowed_facts[idx] += [
+                                f.strip("\n")
+                                .strip(".")
+                                .strip('"')
+                                .strip("'")
+                                .strip(",")
+                                .lower()
+                                for f in facts[:50]
                             ]
-                            ordered_query_keywords = [
-                                k[0]
-                                for k in sorted(
-                                    unordered_query_keywords, key=lambda k: k[1]
-                                )
-                            ]
-                            base_query = " ".join(ordered_query_keywords)
-                            sub_queries.append(base_query)
-                            query_indices.append(idx)
-                    queries.append(sub_queries)
-
-                fact_selector = FactSelector(
-                    [q for sub_q in queries for q in sub_q],
-                    filtered_facts,
-                    min_score=0.6,
-                    inner_batch_size=2048,
-                )
-                selected_facts = [[] for _ in range(len(first_level_keywords))]
-                for idx, list_of_facts in zip(
-                    query_indices, fact_selector.selected_facts
-                ):
-                    selected_facts[idx].append(list_of_facts)
-                return {
-                    "list_of_queries": queries,
-                    "list_of_query_facts": selected_facts,
-                }
-
-            with JSONCache(
-                os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_second_level_facts.json"
-                ),
-                generate_second_level_facts,
-            ) as cache:
-                for idx, list_of_facts in enumerate(cache.data["list_of_query_facts"]):
-                    for facts in list_of_facts:
-                        allowed_facts[idx] += [
-                            f.strip("\n")
-                            .strip(".")
-                            .strip('"')
-                            .strip("'")
-                            .strip(",")
-                            .lower()
-                            for f in facts[:50]
-                        ]
             facts = set(f for facts in allowed_facts for f in facts)
             self.added_qasc_corpus_facts = facts
             facts = sorted(list(facts))
@@ -358,7 +372,9 @@ class QASCMatcher(BaseMatcher):
                 return result
 
             with PickleCache(
-                os.path.join(preprocess_cache_dir, "qasc_matcher_selected_corpus.data"),
+                os.path.join(
+                    preprocess_cache_dir, f"qasc_matcher_selected_corpus_L{level}.data",
+                ),
                 generate_selected_qasc_corpus_tokens,
             ) as cache:
                 for knowledge, tokens, mask in tqdm(cache.data):
@@ -381,7 +397,8 @@ class QASCMatcher(BaseMatcher):
 
             with PickleCache(
                 os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_allowed_composite_nodes.data"
+                    preprocess_cache_dir,
+                    f"qasc_matcher_allowed_composite_nodes_L{level}.data",
                 ),
                 generate_allowed_composite_nodes,
             ) as cache:
@@ -389,7 +406,9 @@ class QASCMatcher(BaseMatcher):
         else:
             self.added_qasc_corpus_facts = set()
             with open(
-                os.path.join(preprocess_cache_dir, "qasc_matcher_selected_corpus.data"),
+                os.path.join(
+                    preprocess_cache_dir, f"qasc_matcher_selected_corpus_L{level}.data"
+                ),
                 "rb",
             ) as file:
                 data = pickle.load(file)
@@ -405,11 +424,66 @@ class QASCMatcher(BaseMatcher):
 
             with open(
                 os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_allowed_composite_nodes.data"
+                    preprocess_cache_dir,
+                    f"qasc_matcher_allowed_composite_nodes_L{level}.data",
                 ),
                 "rb",
             ) as file:
                 self.allowed_composite_nodes = pickle.load(file)
+
+    def update_allowed_composite_nodes_by_question_cluster(self):
+        logging.info("Reorganizing allowed composite nodes")
+
+        def generate_question_cluster():
+            questions = []
+            ids = []
+            for dataset_path in (
+                self.qasc.train_path,
+                self.qasc.validate_path,
+                self.qasc.test_path,
+            ):
+                with open(dataset_path, "r") as file:
+                    for line in file:
+                        entry = json.loads(line)
+                        questions.append(entry["question"]["stem"])
+                        ids.append(entry["id"])
+            embeddings = Embedder("cuda:0").embed(questions)
+            distance = (1 - t.mm(embeddings, embeddings.transpose(0, 1))).cpu().numpy()
+            dbscan = DBSCAN(eps=0.45, min_samples=3)
+            labels = dbscan.fit(distance).labels_.tolist()
+            label_num = len(set(labels).difference({-1}))
+            return ids, labels, label_num
+
+        with JSONCache(
+            os.path.join(preprocess_cache_dir, "qasc_question_cluster.json"),
+            generate_question_cluster,
+        ) as cache:
+            ids, labels, label_num = cache.data
+            grouped_composite_nodes = {}
+            for id_, label in zip(ids, labels):
+                if label in grouped_composite_nodes:
+                    grouped_composite_nodes[label] += self.allowed_composite_nodes[id_]
+                else:
+                    grouped_composite_nodes[label] = self.allowed_composite_nodes[id_]
+            for (
+                label,
+                cluster_allowed_composite_nodes,
+            ) in grouped_composite_nodes.items():
+                grouped_composite_nodes[label] = list(
+                    set(cluster_allowed_composite_nodes)
+                )
+            for id_, label in zip(ids, labels):
+                # Only update allowed composite nodes of clustered questions
+                if label != -1:
+                    self.allowed_composite_nodes[id_] = grouped_composite_nodes[label]
+
+        logging.info(f"Cluster num: {label_num}")
+        length = 0
+        for id, allowed_composite_nodes in self.allowed_composite_nodes.items():
+            length += len(allowed_composite_nodes)
+        logging.info(
+            f"Average search space size: {length / len(self.allowed_composite_nodes)}"
+        )
 
     def validate_qasc_corpus_retrieval_rate(self):
         for split, path in zip(

@@ -487,6 +487,61 @@ class QASCRewardPredictorDataset(Dataset):
         return states, actions, wrong_actions
 
 
+class TrainPathCreator:
+    instance = None  # type: TrainPathCreator
+
+    def __init__(
+        self,
+        data: List[Tuple[str, str, str, List[str]]],
+        matcher: BaseMatcher,
+        max_depth: int = 2,
+    ):
+        self.data = data
+        self.matcher = matcher
+        self.max_depth = max_depth
+
+    @staticmethod
+    def get_train_path_for_sample(idx):
+        self = TrainPathCreator.instance
+        result = self.matcher.find_shortest_path(
+            source_sentence=self.data[idx][1],
+            target_sentence=self.data[idx][2],
+            intermediate_nodes=self.data[idx][3],
+            max_depth_for_each_node=2,
+        )
+        return self.data[idx][0], (result[0], result[1])
+
+    @staticmethod
+    def initialize_pool(data, matcher, max_depth):
+        TrainPathCreator.instance = TrainPathCreator(data, matcher, max_depth)
+
+
+class TrainPathGenerator:
+    def __init__(
+        self,
+        name,
+        data: List[Tuple[str, str, str, List[str]]],
+        matcher: BaseMatcher,
+        max_depth: int = 2,
+    ):
+        self.name = name
+        self.data, self.matcher, self.max_depth = data, matcher, max_depth
+        self.paths = self.generate_train_paths()
+
+    def generate_train_paths(self):
+        result = {}
+        with mp.Pool(
+            initializer=TrainPathCreator.initialize_pool,
+            initargs=(self.data, self.matcher, self.max_depth),
+        ) as pool, tqdm.tqdm(total=len(self.data)) as pbar:
+            for (_id, transitions) in pool.imap_unordered(
+                TrainPathCreator.get_train_path_for_sample, range(len(self.data)),
+            ):
+                pbar.update()
+                result[_id] = transitions
+        return result
+
+
 class RewardPredictorBestFirstBeamSearchDataset(Dataset):
     EOS = None
 

@@ -1,18 +1,16 @@
 import os
-import copy
 import tqdm
 import json
 import itertools
 import warnings
 import torch as t
-import torch.nn.functional as F
+import multiprocessing
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import (
     T5ForConditionalGeneration,
     AutoTokenizer,
-    AutoModel,
     BatchEncoding,
 )
 from pytorch_lightning.utilities import rank_zero_only
@@ -24,6 +22,7 @@ from .utils import (
 from encoder.models.multiple_choice.model import Model
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
 from encoder.dataset.qasc import QASCBaseDataset, QASCAugmentDataset
+from encoder.dataset.sample import TrainPathGenerator
 from encoder.utils.file import JSONCache
 from encoder.utils.config import QASCAugmentTrainConfig, fix_missing
 from encoder.utils.settings import (
@@ -328,12 +327,15 @@ class QASCAugmentTrainer(pl.LightningModule):
                     templates="standard",
                     prioritize_original_annotation=True,
                 )
-                if len(raw_paths) == 1:
-                    train_contexts[id] = [", ".join(raw_paths[0]) + " # "]
-                else:
-                    train_contexts[id] = [
-                        ", ".join(raw_paths[0] + raw_paths[1]) + " # "
-                    ]
+                # if len(raw_paths) == 1:
+                #     train_contexts[id] = [", ".join(raw_paths[0]) + " # "]
+                # else:
+                #     train_contexts[id] = [
+                #         ", ".join(raw_paths[0] + raw_paths[1]) + " # "
+                #     ]
+                train_contexts[id] = [
+                    ", ".join([xx for x in raw_paths for xx in x]) + " # "
+                ]
             else:
                 train_contexts[id] = []
 
@@ -342,13 +344,12 @@ class QASCAugmentTrainer(pl.LightningModule):
     def generate_train_paths(self):
         dataset = QASCBaseDataset(tokenizer=None)
         dataset.matcher.add_qasc_facts(train_and_validate=False)
-        train_paths = {}
-        for d in tqdm.tqdm(dataset.train_data):
-            result = dataset.matcher.find_shortest_path(
-                source_sentence=d["text_question"],
-                target_sentence=d["text_answer"],
-                intermediate_nodes=d["original_facts"],
-                max_depth_for_each_node=2,
-            )
-            train_paths[d["id"]] = (result[0], result[1])
-        return train_paths
+        generator = TrainPathGenerator(
+            "qasc",
+            [
+                (d["id"], d["text_question"], d["text_answer"], d["original_facts"],)
+                for d in dataset.train_data
+            ],
+            dataset.matcher,
+        )
+        return generator.paths

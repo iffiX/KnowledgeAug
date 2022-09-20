@@ -1,24 +1,10 @@
-import os
-import nltk
 import tqdm
 import logging
-import numpy as np
 import torch as t
 import torch.nn.functional as F
 from torch import multiprocessing
 from torch.multiprocessing.spawn import _wrap, ProcessContext
-from transformers import (
-    AutoModel,
-    AutoTokenizer,
-    PreTrainedTokenizerBase,
-    PreTrainedModel,
-)
-from encoder.utils.settings import (
-    model_cache_dir,
-    proxies,
-    huggingface_mirror,
-    local_files_only,
-)
+from .embedder import Embedder
 
 
 def start_processes_with_seperate_args(
@@ -48,23 +34,13 @@ def start_processes_with_seperate_args(
         pass
 
 
-def mean_pooling(token_embeddings, attention_mask):
-    input_mask_expanded = (
-        attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    )
-    return t.sum(token_embeddings * input_mask_expanded, 1) / t.clamp(
-        input_mask_expanded.sum(1), min=1e-9
-    )
-
-
 class FactSelectorParallelContext:
     worker_id: int = None
     worker_num: int = None
     query_embeddings: t.Tensor = None
     min_score: float = None
     max_facts: int = None
-    model: PreTrainedModel = None
-    tokenizer: PreTrainedTokenizerBase = None
+    embedder: Embedder = None
 
 
 class FactSelector:
@@ -187,36 +163,13 @@ class FactSelector:
 
     @staticmethod
     def compute_embeddings_initializer():
-        FactSelectorParallelContext.model = AutoModel.from_pretrained(
-            "sentence-transformers/all-mpnet-base-v2",
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            local_files_only=local_files_only,
-        ).to(f"cuda:{FactSelectorParallelContext.worker_id}")
-        FactSelectorParallelContext.model.eval()
-        FactSelectorParallelContext.tokenizer = AutoTokenizer.from_pretrained(
-            "sentence-transformers/all-mpnet-base-v2",
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            local_files_only=local_files_only,
+        FactSelectorParallelContext.embedder = Embedder(
+            device=f"cuda:{FactSelectorParallelContext.worker_id}"
         )
 
     @staticmethod
     def compute_embeddings_worker(string_batch):
-        with t.no_grad():
-            batch = FactSelectorParallelContext.tokenizer(
-                string_batch,
-                padding="longest",
-                max_length=256,
-                truncation=True,
-                return_tensors="pt",
-            ).to(f"cuda:{FactSelectorParallelContext.worker_id}")
-            embedding = mean_pooling(
-                FactSelectorParallelContext.model(**batch)[0], batch["attention_mask"]
-            )
-            return F.normalize(embedding, p=2, dim=1).cpu()
+        return FactSelectorParallelContext.embedder.embed(string_batch).cpu()
 
     def parallel_run(self, inputs):
         if self.process_context is None:
