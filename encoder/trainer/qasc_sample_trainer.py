@@ -7,7 +7,6 @@ import numpy as np
 import torch as t
 import torch.nn as nn
 import pytorch_lightning as pl
-from tqdm import tqdm
 from typing import List, Tuple
 from torch.utils.data import DataLoader
 from torch.distributed import (
@@ -23,8 +22,8 @@ from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.qasc import QASCBaseDataset
 from encoder.dataset.sample import (
     RewardPredictorDatasetCreatorWithFilter,
-    QASCRewardPredictorDataset,
-    QASCRewardPredictorBestFirstBeamSearchDataset,
+    RewardPredictorDataset,
+    RewardPredictorBestFirstBeamSearchDatasetWithFilter,
 )
 from encoder.utils.config import QASCSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
@@ -101,11 +100,10 @@ class QASCSampleTrainer(pl.LightningModule):
         # )
 
         self.reward_predictor_datasets = {
-            split: QASCRewardPredictorDataset(
+            split: RewardPredictorDataset(
                 f"qasc_{split}",
                 [
                     (
-                        d["id"],
                         d["text_question"],
                         d["text_choices"],
                         d["text_answer"],
@@ -125,6 +123,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 else self.config.negative_shuffle_seed + get_rank(),
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                creator=RewardPredictorDatasetCreatorWithFilter,
             )
             for split, limit_size in (("train", None), ("validate", 100))
         }
@@ -334,7 +333,7 @@ class QASCSampleTrainer(pl.LightningModule):
 
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
-            dataset=QASCRewardPredictorBestFirstBeamSearchDataset(
+            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"{split}_data")

@@ -275,7 +275,8 @@ public:
                                       const std::vector<long> &targetNodes,
                                       const std::vector<long> &allowedCompositeNodes = {},
                                       int maxDepth = 2,
-                                      bool onlyTarget = false,
+                                      bool findTarget = false,
+                                      bool findComposite = true,
                                       bool filterCompositeNodesByFBeta = false,
                                       float minimumFBeta = 0) const;
 

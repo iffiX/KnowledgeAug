@@ -11,7 +11,7 @@
             "max_seq_length": 256,
             "pad_by_longest": true,
             "min_logits": -2,
-            "max_steps": 3,
+            "max_steps": 2,
             "max_depth": 2,
             "optimizer_class": "AdamW",
             "state_delimeter": ", ",
@@ -19,7 +19,7 @@
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_steps": 3, "beam_size": 5}},
+    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 5, "max_inference_num":  50000}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [

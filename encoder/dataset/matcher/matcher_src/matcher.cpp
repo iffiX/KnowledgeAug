@@ -873,6 +873,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #endif
 
     vector<vector<Edge>> bestPath;
+    // Exclude target nodes from searching for now
     for (size_t level = 0; level < searchIds.size() - 1; level++)
     {
         vector<pair<vector<Edge>, float>> paths;
@@ -1127,7 +1128,8 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                                        const std::vector<long> &targetNodes,
                                        const std::vector<long> &allowedCompositeNodes,
                                        int maxDepth,
-                                       bool onlyTarget,
+                                       bool findTarget,
+                                       bool findComposite,
                                        bool filterCompositeNodesByFBeta,
                                        float minimumFBeta) const {
 #ifdef DEBUG
@@ -1210,14 +1212,16 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         vector<vector<long>> reversedPathNodes;
 
         // Add visited target nodes as reversed starts
-        for(long node : targetNodes) {
-            if (previousNodes.find(node) != previousNodes.end())
-                unvisited.push(make_pair(node, vector<long>{node}));
+        if (findTarget) {
+            for (long node : targetNodes) {
+                if (previousNodes.find(node) != previousNodes.end())
+                    unvisited.push(make_pair(node, vector<long>{node}));
+            }
         }
         // Find all visited composite nodes and add them as reversed starts
         // Note that visited nodes may not be visited in the current traversal (see argument visitedNodes)
         // exclude them
-        if (not onlyTarget) {
+        if (findComposite) {
             for (long node = 0; node < kb.nodes.size(); node++) {
                 if (visited[node] and kb.isNodeComposite[node]
                     and previousNodes.find(node) != previousNodes.end()

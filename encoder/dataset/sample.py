@@ -126,105 +126,6 @@ class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
         )
 
 
-class QASCRewardPredictorDatasetCreator:
-    instance = None  # type: "QASCRewardPredictorDatasetCreator"
-
-    def __init__(
-        self,
-        data: List[Tuple[str, str, str, str, List[str]]],
-        matcher: BaseMatcher,
-        max_depth: int = 2,
-        state_delimiter: str = ", ",
-        end_of_reasoning: str = "END_OF_REASONING",
-    ):
-        self.data = data
-        self.matcher = matcher
-        self.max_depth = max_depth
-        self.state_delimiter = state_delimiter
-        self.end_of_reasoning = end_of_reasoning
-
-    @staticmethod
-    def get_transitions_for_sample(data_idx):
-        try:
-            self = QASCRewardPredictorDatasetCreator.instance
-            result = self.matcher.find_shortest_path(
-                source_sentence=self.data[data_idx][1],
-                target_sentence=self.data[data_idx][3],
-                intermediate_nodes=self.data[data_idx][4],
-                max_depth_for_each_node=self.max_depth,
-            )
-            _, target_nodes = self.matcher.match_source_and_target_nodes(
-                self.data[data_idx][1], self.data[data_idx][3]
-            )
-            state = self.data[data_idx][1] + " " + self.data[data_idx][2] + " /n "
-            transitions = []
-
-            if len(result[0]) > 0:
-                # Note, nodes have one more level than annotations and edges
-                # The last edge should be "end of reasoning", and all possible choices are excluded
-                visited_nodes = []
-                for sub_path_annotations, sub_path_edges, start_nodes in zip(
-                    result[0] + [[self.end_of_reasoning]], result[1] + [[]], result[2],
-                ):
-                    # collect paths that will be used as negative samples
-                    (
-                        list_of_neg_sub_path_annotations,
-                        _,
-                        _,
-                        list_of_neg_sub_path_edges,
-                    ) = self.find_available_choices(
-                        self,
-                        visited_nodes,
-                        start_nodes,
-                        target_nodes,
-                        self.data[data_idx][0],
-                    )
-
-                    # exclude the right sub path
-                    list_of_neg_annotations = [
-                        neg_sub_path_annotations
-                        for neg_sub_path_annotations, neg_sub_path_edges in zip(
-                            list_of_neg_sub_path_annotations, list_of_neg_sub_path_edges
-                        )
-                        if neg_sub_path_edges != sub_path_edges
-                    ]
-                    # state, correct action, wrong actions
-                    transitions.append(
-                        (state, sub_path_annotations, list_of_neg_annotations)
-                    )
-                    state = (
-                        state
-                        + self.state_delimiter
-                        + self.state_delimiter.join(sub_path_annotations)
-                    )
-                    visited_nodes += [e[0] for e in sub_path_edges] + [
-                        e[2] for e in sub_path_edges
-                    ]
-                    visited_nodes = list(set(visited_nodes))
-        except Exception as e:
-            print(f"Error: {data_idx}")
-            raise e
-        return data_idx, transitions
-
-    @staticmethod
-    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
-        QASCRewardPredictorDatasetCreator.instance = QASCRewardPredictorDatasetCreator(
-            data, matcher, max_depth, state_delimiter, end_of_reasoning
-        )
-
-    @staticmethod
-    def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes, id_
-    ):
-        return self.matcher.find_available_choices(
-            visited_nodes,
-            current_reached_nodes,
-            target_nodes,
-            allowed_composite_nodes=self.matcher.allowed_composite_nodes[id_],
-            max_depth=self.max_depth,
-        )
-
-
 class RewardPredictorDataset(Dataset):
     def __init__(
         self,
@@ -256,137 +157,6 @@ class RewardPredictorDataset(Dataset):
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
         self.creator = creator or RewardPredictorDatasetCreator
-        self.pretrain_data = None
-
-    def __len__(self):
-        if self.pretrain_data is None:
-            self.load()
-        return len(self.pretrain_data[0])
-
-    def __getitem__(self, idx):
-        if self.pretrain_data is None:
-            self.load()
-        if self.negative_samples is not None:
-            negative_samples = min(
-                self.negative_samples, len(self.pretrain_data[2][idx])
-            )
-            self.rand.shuffle(self.pretrain_data[2][idx])
-            # state, action, wrong actions
-            if self.pretrain_data[1][idx] == [self.end_of_reasoning]:
-                return (
-                    self.pretrain_data[0][idx],
-                    self.state_delimiter.join(self.pretrain_data[1][idx]),
-                    [
-                        self.state_delimiter.join(x)
-                        for x in self.pretrain_data[2][idx][:negative_samples]
-                    ],
-                )
-            else:
-                return (
-                    self.pretrain_data[0][idx],
-                    self.state_delimiter.join(self.pretrain_data[1][idx]),
-                    [
-                        self.state_delimiter.join(x)
-                        for x in self.pretrain_data[2][idx][: negative_samples - 1]
-                    ]
-                    + [self.end_of_reasoning],
-                )
-        else:
-            if self.pretrain_data[1][idx] == [self.end_of_reasoning]:
-                append = []
-            else:
-                append = [self.end_of_reasoning]
-            return (
-                self.pretrain_data[0][idx],
-                self.state_delimiter.join(self.pretrain_data[1][idx]),
-                [self.state_delimiter.join(x) for x in self.pretrain_data[2][idx]]
-                + append,
-            )
-
-    def load(self):
-        with PickleCache(
-            os.path.join(preprocess_cache_dir, f"{self.name}_reward_predictor.data"),
-            generate_func=self.get_pretrain_data,
-        ) as cache:
-            self.pretrain_data = cache.data
-
-        if self.limit_size is not None:
-            shuffled_indices = list(range(len(self.pretrain_data[0])))
-            self.rand.shuffle(shuffled_indices)
-            self.pretrain_data = (
-                [self.pretrain_data[0][i] for i in shuffled_indices[: self.limit_size]],
-                [self.pretrain_data[1][i] for i in shuffled_indices[: self.limit_size]],
-                [self.pretrain_data[2][i] for i in shuffled_indices[: self.limit_size]],
-            )
-
-    def get_pretrain_data(self):
-        result = []
-        with mp.Pool(
-            initializer=self.creator.initialize_pool,
-            initargs=(
-                self.data,
-                self.matcher,
-                self.max_depth,
-                self.state_delimiter,
-                self.end_of_reasoning,
-            ),
-        ) as pool, tqdm.tqdm(total=len(self.data)) as pbar:
-            for (idx, transitions) in pool.imap_unordered(
-                self.creator.get_transitions_for_sample, range(len(self.data)),
-            ):
-                pbar.update()
-                if self.limit_neg_transition_num is not None:
-                    new_transitions = []
-                    for trans in transitions:
-                        self.rand.shuffle(trans[2])
-                        new_transitions.append(
-                            (
-                                trans[0],
-                                trans[1],
-                                trans[2][: self.limit_neg_transition_num],
-                            )
-                        )
-                    transitions = new_transitions
-                result.append((idx, transitions))
-        transitions = [res[1] for res in sorted(result, key=lambda res: res[0])]
-        transitions = [ttr for tr in transitions for ttr in tr]
-        states = [trans[0] for trans in transitions]
-        actions = [trans[1] for trans in transitions]
-        wrong_actions = [trans[2] for trans in transitions]
-        return states, actions, wrong_actions
-
-
-class QASCRewardPredictorDataset(Dataset):
-    def __init__(
-        self,
-        name: str,
-        data: List[Tuple[str, str, str, str, List[str]]],
-        matcher: BaseMatcher,
-        limit_size: int = None,
-        limit_neg_transition_num: int = None,
-        max_depth: int = 2,
-        negative_samples: Union[int, None] = 5,
-        negative_shuffle_seed: int = 42,
-        state_delimiter: str = ", ",
-        end_of_reasoning: str = "END_OF_REASONING",
-        creator=None,
-    ):
-        """
-        Args:
-            name: Dataset name, used to differ cache from one another.
-            data: A list of tuples of question, choices, answer and facts.
-        """
-        self.name = name
-        self.data = data
-        self.rand = random.Random(negative_shuffle_seed)
-        self.matcher = matcher
-        self.limit_size = limit_size
-        self.limit_neg_transition_num = limit_neg_transition_num
-        self.max_depth = max_depth
-        self.negative_samples = negative_samples
-        self.state_delimiter = state_delimiter
-        self.end_of_reasoning = end_of_reasoning
-        self.creator = creator or QASCRewardPredictorDatasetCreator
         self.pretrain_data = None
 
     def __len__(self):
@@ -832,7 +602,6 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
             current_reached_nodes,
             target_nodes,
             max_depth=self.max_depth,
-            only_target=length == self.max_steps - 1 and self.max_steps > 1,
         )
 
     @staticmethod
@@ -915,23 +684,6 @@ class RewardPredictorBestFirstBeamSearchDatasetWithFilter(
             current_reached_nodes,
             target_nodes,
             max_depth=self.max_depth,
-            only_target=length == self.max_steps - 1 and self.max_steps > 1,
             filter_composite_nodes_by_f_beta=True,
             minimum_f_beta=0.35,
-        )
-
-
-class QASCRewardPredictorBestFirstBeamSearchDataset(
-    RewardPredictorBestFirstBeamSearchDataset
-):
-    def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes, length, _id
-    ):
-        return self.matcher.find_available_choices(
-            visited_nodes,
-            current_reached_nodes,
-            target_nodes,
-            allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
-            only_target=length == self.max_steps - 1 and self.max_steps > 1,
-            max_depth=self.max_depth,
         )

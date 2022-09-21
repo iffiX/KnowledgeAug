@@ -222,7 +222,8 @@ class BaseMatcher:
         target_nodes: List[int],
         allowed_composite_nodes: List[int] = None,
         max_depth: int = 2,
-        only_target: bool = False,
+        find_target: bool = False,
+        find_composite: bool = True,
         filter_composite_nodes_by_f_beta: bool = False,
         minimum_f_beta: float = 0,
     ) -> Tuple[List[List[str]], List[List[int]], List[int], List[List[Edge]]]:
@@ -247,7 +248,8 @@ class BaseMatcher:
             target_nodes,
             allowed_composite_nodes,
             max_depth,
-            only_target,
+            find_target,
+            find_composite,
             filter_composite_nodes_by_f_beta,
             minimum_f_beta,
         )
