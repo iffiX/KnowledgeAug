@@ -1,12 +1,12 @@
 {
     "configs": [
         {
-            "base_type": "cross-encoder/ms-marco-MiniLM-L-12-v2",
+            "base_type": "cross-encoder/ms-marco-MiniLM-L-6-v2",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 15,
+            "negative_samples": 31,
             "learning_rate": 5e-6,
-            "inference_batch_size": 1024,
+            "inference_batch_size": 512,
             "load": false,
             "max_seq_length": 256,
             "pad_by_longest": true,
@@ -19,9 +19,9 @@
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 5, "max_inference_num": 50000}},
+    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 5, "max_inference_num": 50000, "inference_batch_size": 512}},
     "early_stopping_patience": 15,
-    "gpus": [0, 1, 2, 3, 4, 5, 6, 7],
+    "gpus": [0, 1, 2, 3, 4],
     "stages": [
         "qasc_sample"
     ],

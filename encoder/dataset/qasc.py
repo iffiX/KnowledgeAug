@@ -216,20 +216,20 @@ class QASCBaseDataset:
         self.matcher.matcher.set_corpus(corpus)
 
     def generate_data(self):
-        return {
-            "train": self.parse_data(self.commonsense_qa.train_path, "train"),
-            "validate": self.parse_data(self.commonsense_qa.validate_path, "validate"),
-            "test": self.parse_data(self.commonsense_qa.test_path, "test"),
-        }
         # return {
-        #     "train": self.sort_facts(
-        #         self.parse_data(self.commonsense_qa.train_path, "train")
-        #     ),
-        #     "validate": self.sort_facts(
-        #         self.parse_data(self.commonsense_qa.validate_path, "validate")
-        #     ),
+        #     "train": self.parse_data(self.commonsense_qa.train_path, "train"),
+        #     "validate": self.parse_data(self.commonsense_qa.validate_path, "validate"),
         #     "test": self.parse_data(self.commonsense_qa.test_path, "test"),
         # }
+        return {
+            "train": self.sort_facts(
+                self.parse_data(self.commonsense_qa.train_path, "train")
+            ),
+            "validate": self.sort_facts(
+                self.parse_data(self.commonsense_qa.validate_path, "validate")
+            ),
+            "test": self.parse_data(self.commonsense_qa.test_path, "test"),
+        }
 
     def sort_facts(self, split_data):
         import torch

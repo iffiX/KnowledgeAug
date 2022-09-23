@@ -15,6 +15,12 @@ find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 add_subdirectory(pybind11)
 #set(XTENSOR_USE_XSIMD 1)
 add_subdirectory(backward-cpp)
+find_package(OpenMP)
+if (OPENMP_FOUND)
+   set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
+   set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+   set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
+endif()
 ################################################################
 # Main builds
 ################################################################

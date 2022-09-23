@@ -275,6 +275,7 @@ public:
                                       const std::vector<long> &targetNodes,
                                       const std::vector<long> &allowedCompositeNodes = {},
                                       int maxDepth = 2,
+                                      bool parallel = true,
                                       bool findTarget = false,
                                       bool findComposite = true,
                                       bool filterCompositeNodesByFBeta = false,
@@ -324,6 +325,9 @@ private:
     std::vector<int> edgeToAnnotation(const Edge &edge) const;
 
     std::string edgeToStringAnnotation(const Edge &edge) const;
+
+    static size_t componentIntersection(const std::unordered_map<long, float> &sourceNodes,
+                                        const std::unordered_map<long, float> &targetNodes);
 
     float computeFBetaScoreWithCache(long node, const std::unordered_map<long, float> &targetNodes,
                                      std::unordered_map<std::pair<long, long>, float, PairHash> &similarityCache,

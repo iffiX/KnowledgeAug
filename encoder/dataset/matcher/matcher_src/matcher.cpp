@@ -1128,6 +1128,7 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                                        const std::vector<long> &targetNodes,
                                        const std::vector<long> &allowedCompositeNodes,
                                        int maxDepth,
+                                       bool parallel,
                                        bool findTarget,
                                        bool findComposite,
                                        bool filterCompositeNodesByFBeta,
@@ -1148,16 +1149,20 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
     ChoiceResult result;
     unordered_set<long> targetNodesSet(targetNodes.begin(), targetNodes.end());
     vector<bool> allowedCompositeNodesIndex(kb.nodes.size(), false);
-    for (long allowedCompositeNode : allowedCompositeNodes)
-        allowedCompositeNodesIndex[allowedCompositeNode] = true;
     unordered_map<pair<long, long>, float, PairHash> similarityCache;
     unordered_map<long, float> context;
 
     for (long startNode : startNodes)
         context[startNode] += 1;
 
-    size_t bestLevelDepth = maxDepth;
+    for (long allowedCompositeNode : allowedCompositeNodes)
+        allowedCompositeNodesIndex[allowedCompositeNode] = true;
 
+#pragma omp parallel for num_threads(4) default(none) private(similarityCache) \
+    shared(visitedNodes, startNodes, targetNodes, allowedCompositeNodes, \
+           maxDepth, findTarget, findComposite, filterCompositeNodesByFBeta, minimumFBeta,\
+           targetNodesSet, allowedCompositeNodesIndex, context, result) \
+    if (parallel)
     for (long startNode : startNodes) {
         unordered_set<long> lastStepVisitedNodes;
         unordered_map<long, vector<long>> previousNodes;
@@ -1170,7 +1175,7 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         previousNodes[startNode] = {};
 
         size_t step;
-        for (step = 0; step < bestLevelDepth; step++) {
+        for (step = 0; step < maxDepth; step++) {
             unordered_set<long> newVisitedNodes;
             for (long lastNode : lastStepVisitedNodes) {
                 // We only want paths made up of hops between non composite nodes to either:
@@ -1267,10 +1272,10 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                     break;
                 }
             }
+
             if (isPathCompleted) {
                 // Store annotations of each edge
-                get<0>(result).emplace_back(vector<vector<int>>{});
-                auto &edgeAnnotations = get<0>(result).back();
+                auto edgeAnnotations = vector<vector<int>>{};
                 for(auto &edge : path)
                     edgeAnnotations.push_back(edgeToAnnotation(edge));
 
@@ -1282,10 +1287,14 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
                 }
                 else
                     endNodes.push_back(rpn[0]);
-                get<1>(result).emplace_back(endNodes);
-                get<2>(result).emplace_back(rpn[0]);
-                // Store path
-                get<3>(result).emplace_back(path);
+
+#pragma omp critical
+                {
+                    get<0>(result).emplace_back(edgeAnnotations);
+                    get<1>(result).emplace_back(endNodes);
+                    get<2>(result).emplace_back(rpn[0]);
+                    get<3>(result).emplace_back(path);
+                };
             }
         }
     }
@@ -1698,6 +1707,15 @@ string KnowledgeMatcher::edgeToStringAnnotation(const Edge &edge) const {
     return move(edgeAnno);
 }
 
+size_t KnowledgeMatcher::componentIntersection(const std::unordered_map<long, float> &sourceNodes,
+                                               const std::unordered_map<long, float> &targetNodes) {
+    size_t count = 0;
+    for (auto &node : sourceNodes)
+        if (targetNodes.find(node.first) != targetNodes.end())
+            count += 1;
+    return count;
+}
+
 float KnowledgeMatcher::computeFBetaScoreWithCache(long node, const unordered_map<long, float> &targetNodes,
                                                    unordered_map<pair<long, long>, float, PairHash> &similarityCache,
                                                    float beta) const {
@@ -1748,12 +1766,7 @@ float KnowledgeMatcher::computeFBetaScoreWithCache(long node, const unordered_ma
 
             for (auto &tNode : targetNodes) {
                 auto simPair = make_pair(tNode.first, subNode.first);
-                if (similarityCache.find(simPair) == similarityCache.end()) {
-                    simToEachTarget = kb.cosineSimilarity(subNode.first, tNode.first);
-                    similarityCache[simPair] = simToEachTarget;
-                } else {
-                    simToEachTarget = similarityCache.at(simPair);
-                }
+                simToEachTarget = similarityCache.at(simPair);
 
                 if (simToEachTarget > tNodeSim) {
                     tNodeSim = simToEachTarget;

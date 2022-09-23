@@ -129,6 +129,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_nodes"),
                  py::arg("allowed_composite_nodes") = std::vector<long>{},
                  py::arg("max_depth") = 2,
+                 py::arg("parallel") = true,
                  py::arg("find_target") = false,
                  py::arg("find_composite") = true,
                  py::arg("filter_composite_nodes_by_f_beta") = false,

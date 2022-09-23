@@ -222,6 +222,7 @@ class BaseMatcher:
         target_nodes: List[int],
         allowed_composite_nodes: List[int] = None,
         max_depth: int = 2,
+        parallel: bool = True,
         find_target: bool = False,
         find_composite: bool = True,
         filter_composite_nodes_by_f_beta: bool = False,
@@ -248,12 +249,13 @@ class BaseMatcher:
             target_nodes,
             allowed_composite_nodes,
             max_depth,
+            parallel,
             find_target,
             find_composite,
             filter_composite_nodes_by_f_beta,
             minimum_f_beta,
         )
-        return (
+        result = (
             [
                 self.tokenizer.batch_decode(sub_path_tokens)
                 for sub_path_tokens in list_of_sub_path_annotation_tokens
@@ -263,6 +265,7 @@ class BaseMatcher:
             list_of_sub_path_raw_next_nodes,
             list_of_sub_path_edges,
         )
+        return result
 
     def sub_paths_to_annotations(
         self,

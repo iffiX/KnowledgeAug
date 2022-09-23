@@ -4,6 +4,9 @@ Build in Release mode
 -- pybind11 v2.5.0
 -- Could NOT find libdw (missing: LIBDW_LIBRARY LIBDW_INCLUDE_DIR) 
 -- Could NOT find libdwarf (missing: LIBDWARF_LIBRARY LIBDWARF_INCLUDE_DIR LIBELF_LIBRARY LIBELF_INCLUDE_DIR) 
+-- Found OpenMP_C: -fopenmp  
+-- Found OpenMP_CXX: -fopenmp  
+-- Found OpenMP: TRUE   
 -- Configuring done
 -- Generating done
 -- Build files have been written to: /home/iffi/Projects/KnowledgeAug/encoder/dataset/matcher/matcher_src/cmake-build-debug

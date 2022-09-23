@@ -3,6 +3,7 @@ import copy
 import json
 import itertools
 import warnings
+import random
 import numpy as np
 import torch as t
 import torch.nn as nn
@@ -99,39 +100,37 @@ class QASCSampleTrainer(pl.LightningModule):
         #     f"F-Beta-l2: min={filter_bound_range_l2[0]}, max={filter_bound_range_l2[1]}"
         # )
 
-        self.reward_predictor_datasets = {
-            split: RewardPredictorDataset(
-                f"qasc_{split}",
-                [
-                    (
-                        d["text_question"],
-                        d["text_choices"],
-                        d["text_answer"],
-                        d["original_facts"],
-                    )
-                    for d in getattr(self.dataset, f"{split}_data")
-                ],
-                matcher,
-                limit_size=limit_size,
-                limit_neg_transition_num=4000,
-                max_depth=self.config.max_depth,
-                negative_samples=self.config.negative_samples
-                if split == "train"
-                else None,
-                negative_shuffle_seed=self.config.negative_shuffle_seed
-                if not is_initialized()
-                else self.config.negative_shuffle_seed + get_rank(),
-                state_delimiter=self.config.state_delimeter,
-                end_of_reasoning=self.config.end_of_reasoning,
-                creator=RewardPredictorDatasetCreatorWithFilter,
-            )
-            for split, limit_size in (("train", None), ("validate", 100))
-        }
+        self.train_reward_predictor_dataset = RewardPredictorDataset(
+            "qasc_train",
+            [
+                (
+                    d["text_question"],
+                    d["text_choices"],
+                    d["text_answer"],
+                    d["original_facts"],
+                )
+                for d in self.dataset.train_data
+            ],
+            matcher,
+            limit_neg_transition_num=4000,
+            max_depth=self.config.max_depth,
+            negative_samples=self.config.negative_samples,
+            negative_shuffle_seed=self.config.negative_shuffle_seed
+            if not is_initialized()
+            else self.config.negative_shuffle_seed + get_rank(),
+            state_delimiter=self.config.state_delimeter,
+            end_of_reasoning=self.config.end_of_reasoning,
+            creator=RewardPredictorDatasetCreatorWithFilter,
+        )
+        rand = random.Random(42)
+        self.validate_indices = rand.choices(
+            list(range(len(self.dataset.validate_data))), k=100
+        )
         self.test_result = {}
 
     @property
     def monitor(self):
-        return "is_right_max_accuracy"
+        return "retrieval"
 
     @property
     def monitor_mode(self):
@@ -141,10 +140,14 @@ class QASCSampleTrainer(pl.LightningModule):
         return self.reward_predictor
 
     def train_dataloader(self):
-        return self.create_sample_dataloader("train")
+        return DataLoader(
+            dataset=self.train_reward_predictor_dataset,
+            batch_size=self.config.batch_size,
+            collate_fn=lambda x: x,
+        )
 
     def val_dataloader(self):
-        return self.create_sample_dataloader("validate")
+        return self.create_sample_inference_dataloader_for_validate()
 
     def test_dataloader(self):
         path = os.path.join(preprocess_cache_dir, "qasc_sample_result.json")
@@ -173,29 +176,16 @@ class QASCSampleTrainer(pl.LightningModule):
 
     # noinspection PyTypeChecker
     def validation_step(self, batch, batch_idx):
-        state, action, wrong_actions = batch[0]
-        states = [state] * (1 + len(wrong_actions))
-        actions = [action] + wrong_actions
-        labels = np.array([1] + [0] * len(wrong_actions))
-        logits = (
-            self.reward_predictor(
-                states,
-                actions,
-                inference=True,
-                inference_batch_size=self.config.inference_batch_size,
-            )
-            .squeeze(1)
-            .cpu()
-        )
-        # equal to sigmoid > 0.5
-        predict_labels = (logits > 0).numpy()
-        is_right_max = t.argmax(logits).item() == 0
-        return {
-            "idx": batch_idx,
-            "accuracy": accuracy_score(labels, predict_labels),
-            "f1": f1_score(labels, predict_labels),
-            "is_right_max": is_right_max,
-        }
+        _, paths, *__ = batch[0]
+        count = 0
+        for fact in self.dataset.validate_data[self.validate_indices[batch_idx]][
+            "original_facts"
+        ]:
+            for path in paths:
+                if fact in " ".join(path):
+                    count += 1
+                    break
+        return {"idx": batch_idx, "count": count}
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -215,26 +205,13 @@ class QASCSampleTrainer(pl.LightningModule):
                 filtered_outputs.append(o)
                 existing_idx.add(o["idx"])
 
-        average_accuracy = float(np.mean([o["accuracy"] for o in filtered_outputs]))
-        average_f1 = float(np.mean([o["f1"] for o in filtered_outputs]))
-        average_is_right_max_accuracy = float(
-            np.mean([o["is_right_max"] for o in filtered_outputs])
-        )
+        average_retrieval = float(np.mean([o["count"] for o in filtered_outputs]))
         self.log(
-            f"accuracy", average_accuracy, prog_bar=True, sync_dist=True,
-        )
-        self.log(f"f1", average_f1, prog_bar=True, sync_dist=True)
-        self.log(
-            f"is_right_max_accuracy",
-            average_is_right_max_accuracy,
-            prog_bar=True,
-            sync_dist=True,
+            f"retrieval", average_retrieval, prog_bar=True, sync_dist=True,
         )
         if not self.is_distributed or get_rank() == 0:
             print(f"Validation result:")
-            print(f"accuracy: {average_accuracy}")
-            print(f"f1: {average_f1}")
-            print(f"is_right_max_accuracy: {average_is_right_max_accuracy}")
+            print(f"retrieval length: {average_retrieval}")
 
     # def on_test_start(self) -> None:
     #     # print(f"Rank: {get_rank()}, min_logits={self.config.min_logits}")
@@ -265,7 +242,7 @@ class QASCSampleTrainer(pl.LightningModule):
     ):
         if not self.is_distributed or get_rank() == 0:
             result = self.test_result
-            sorted_outputs = [o[1][:-1] for o in sorted(outputs, key=lambda o: o[0])]
+            sorted_outputs = [o[1][:3] for o in sorted(outputs, key=lambda o: o[0])]
             for id, paths, path_edges in sorted_outputs:
                 result[id] = (paths, path_edges)
 
@@ -324,10 +301,33 @@ class QASCSampleTrainer(pl.LightningModule):
             ],
         )
 
-    def create_sample_dataloader(self, split):
+    def create_sample_inference_dataloader_for_validate(self):
+        data = self.dataset.validate_data
         return DataLoader(
-            dataset=self.reward_predictor_datasets[split],
-            batch_size=self.config.batch_size if split == "train" else 1,
+            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
+                [
+                    (
+                        data[i]["id"],
+                        data[i]["text_question"],
+                        ", ".join(data[i]["choices"]),
+                    )
+                    for i in self.validate_indices
+                ],
+                self.reward_predictor,
+                self.dataset.matcher,
+                existing_ids=set(self.test_result.keys()),
+                max_steps=self.config.max_steps,
+                max_depth=self.config.max_depth,
+                beam_size=self.config.beam_size,
+                return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
+                min_logits=self.config.min_logits,
+                max_inference_num=self.config.max_inference_num,
+                inference_batch_size=self.config.inference_batch_size,
+                state_delimiter=self.config.state_delimeter,
+                end_of_reasoning=self.config.end_of_reasoning,
+                stop_when_reaching_target_nodes=False,
+            ),
+            batch_size=1,
             collate_fn=lambda x: x,
         )
 
@@ -337,7 +337,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"{split}_data")
-                ],
+                ][:20],
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")
