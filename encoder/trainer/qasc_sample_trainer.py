@@ -9,7 +9,7 @@ import torch as t
 import torch.nn as nn
 import pytorch_lightning as pl
 from typing import List, Tuple
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from torch.distributed import (
     all_gather_object,
     get_world_size,
@@ -140,8 +140,11 @@ class QASCSampleTrainer(pl.LightningModule):
         return self.reward_predictor
 
     def train_dataloader(self):
+        gen = t.Generator()
+        gen.manual_seed(42)
         return DataLoader(
             dataset=self.train_reward_predictor_dataset,
+            sampler=RandomSampler(self.train_reward_predictor_dataset, generator=gen),
             batch_size=self.config.batch_size,
             collate_fn=lambda x: x,
         )
@@ -337,7 +340,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 [
                     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                     for d in getattr(self.dataset, f"{split}_data")
-                ][:20],
+                ],
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")
@@ -359,7 +362,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
-                stop_when_reaching_target_nodes=False,
+                stop_when_reaching_target_nodes=True,
             ),
             batch_size=1,
             collate_fn=lambda x: x,

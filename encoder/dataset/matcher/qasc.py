@@ -61,7 +61,6 @@ class QASCMatcher(BaseMatcher):
 
         self.added_qasc_corpus_facts = None
         self.add_qasc_corpus()
-        self.validate_qasc_corpus_retrieval_rate()
 
     def add_qasc_facts(self, train_and_validate=False):
         logging.info(
@@ -165,87 +164,59 @@ class QASCMatcher(BaseMatcher):
                             .strip(",")
                             .lower()
                             for facts in cache.data["query_facts"]
-                            for f in facts[:10]
+                            for f in facts[:50]
                         ]
                     )
                 )
-                first_level_top_facts = [
-                    facts[:5] for facts in cache.data["query_facts"]
-                ]
 
-            def generate_first_level_keywords():
-                first_level_keywords = []
-                lemma = nltk.wordnet.WordNetLemmatizer()
-                for facts in tqdm(first_level_top_facts):
-                    tokens = nltk.word_tokenize(" ".join(facts))
-                    keywords = set()
-                    for token, pos in BaseMatcher.safe_pos_tag(tokens):
-                        if pos.startswith("NN") or pos.startswith("JJ"):
-                            lem_token = lemma.lemmatize(token.lower())
-                            if lem_token not in self.STOPWORDS_SET:
-                                keywords.add(lem_token)
-                    first_level_keywords.append(list(keywords))
-                return first_level_keywords
-
-            with JSONCache(
-                os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_first_level_keywords.json"
-                ),
-                generate_first_level_keywords,
-            ) as cache:
-                first_level_keywords = cache.data
-
-            def generate_second_level_facts():
-                list_of_choices = []
-                queries = []
-                for dataset_path in (
-                    self.qasc.train_path,
-                    self.qasc.validate_path,
-                    self.qasc.test_path,
-                ):
-                    with open(dataset_path, "r") as file:
-                        for line in file:
-                            entry = json.loads(line)
-                            list_of_choices.append(
-                                [
-                                    choice["text"]
-                                    for choice in entry["question"]["choices"]
-                                ]
-                            )
-                for keywords, choices in zip(first_level_keywords, list_of_choices):
-                    base_query = " ".join(keywords)
-                    for choice in choices:
-                        queries.append(base_query + " " + choice)
-                with open(self.qasc.corpus_path, "r") as file:
-                    raw_facts = [line.strip("\n") for line in file]
-                fact_selector = FactSelector(queries, raw_facts, min_score=0.55)
-                return {
-                    "queries": queries,
-                    "query_facts": fact_selector.selected_facts,
-                    "query_facts_rank": fact_selector.selected_facts_rank,
-                }
-
-            with JSONCache(
-                os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_second_level_facts.json"
-                ),
-                generate_second_level_facts,
-            ) as cache:
-                second_level_facts = list(
-                    set(
-                        [
-                            f.strip("\n")
-                            .strip(".")
-                            .strip('"')
-                            .strip("'")
-                            .strip(",")
-                            .lower()
-                            for facts in cache.data["query_facts"]
-                            for f in facts[:5]
-                        ]
-                    )
-                )
-            facts = list(set(first_level_facts + second_level_facts))
+            # def generate_second_level_facts():
+            #     list_of_choices = []
+            #     queries = []
+            #     for dataset_path in (
+            #         self.qasc.train_path,
+            #         self.qasc.validate_path,
+            #         self.qasc.test_path,
+            #     ):
+            #         with open(dataset_path, "r") as file:
+            #             for line in file:
+            #                 entry = json.loads(line)
+            #                 for choice in entry["question"]["choices"]:
+            #                     queries.append(
+            #                         entry["question"]["stem"].strip("?")
+            #                         + " "
+            #                         + choice["text"]
+            #                     )
+            #     with open(self.qasc.corpus_path, "r") as file:
+            #         raw_facts = [line.strip("\n") for line in file]
+            #     fact_selector = FactSelector(queries, raw_facts, min_score=0.55)
+            #     return {
+            #         "queries": queries,
+            #         "query_facts": fact_selector.selected_facts,
+            #         "query_facts_rank": fact_selector.selected_facts_rank,
+            #     }
+            #
+            # with JSONCache(
+            #     os.path.join(
+            #         preprocess_cache_dir, "qasc_matcher_second_level_facts.json"
+            #     ),
+            #     generate_second_level_facts,
+            # ) as cache:
+            #     second_level_facts = list(
+            #         set(
+            #             [
+            #                 f.strip("\n")
+            #                 .strip(".")
+            #                 .strip('"')
+            #                 .strip("'")
+            #                 .strip(",")
+            #                 .lower()
+            #                 for facts in cache.data["query_facts"]
+            #                 for f in facts[:5]
+            #             ]
+            #         )
+            #     )
+            # facts = list(set(first_level_facts + second_level_facts))
+            facts = list(set(first_level_facts))
             self.added_qasc_corpus_facts = set(facts)
 
             def generate_filtered_qasc_corpus_tokens():
@@ -279,49 +250,6 @@ class QASCMatcher(BaseMatcher):
                     )
                     self.added_qasc_corpus_facts.add(knowledge)
                 logging.info(f"Added {len(data)} composite nodes")
-
-    def validate_qasc_corpus_retrieval_rate(self):
-        for split, path in zip(
-            ("train", "validate"), (self.qasc.train_path, self.qasc.validate_path)
-        ):
-            fact1_retrieved_count = 0
-            fact2_retrieved_count = 0
-            total = 0
-            with open(path, "r") as file:
-                for line in file:
-                    total += 1
-                    entry = json.loads(line)
-                    fact1 = (
-                        entry["fact1"]
-                        .strip("\n")
-                        .strip(".")
-                        .strip('"')
-                        .strip("'")
-                        .strip(",")
-                        .lower()
-                    )
-                    fact2 = (
-                        entry["fact2"]
-                        .strip("\n")
-                        .strip(".")
-                        .strip('"')
-                        .strip("'")
-                        .strip(",")
-                        .lower()
-                    )
-                    if fact1 in self.added_qasc_corpus_facts:
-                        fact1_retrieved_count += 1
-                    if fact2 in self.added_qasc_corpus_facts:
-                        fact2_retrieved_count += 1
-            logging.info(
-                f"{split}-Fact1 retrieved ratio: {fact1_retrieved_count / total}"
-            )
-            logging.info(
-                f"{split}-Fact2 retrieved ratio: {fact2_retrieved_count / total}"
-            )
-            logging.info(
-                f"{split}-retrieved length: {(fact1_retrieved_count + fact2_retrieved_count) / total}"
-            )
 
     def __reduce__(self):
         return QASCMatcher, (self.tokenizer,)

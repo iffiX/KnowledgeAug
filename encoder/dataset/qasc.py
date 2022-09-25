@@ -48,7 +48,10 @@ class QASCBaseDataset:
             self.train_data = cache.data["train"]
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
+        rand = random.Random(42)
+        rand.shuffle(self.train_data)
         self.set_corpus()
+        self.validate_qasc_corpus_retrieval_rate()
 
     @property
     def train_dataset(self):
@@ -343,6 +346,27 @@ class QASCBaseDataset:
                 data.append(preprocessed)
         return data
 
+    def validate_qasc_corpus_retrieval_rate(self):
+        for split, data in zip(
+            ("train", "validate"), (self.train_data, self.validate_data)
+        ):
+            fact1_retrieved_count = 0
+            fact2_retrieved_count = 0
+            for d in data:
+                if d["original_facts"][0] in self.matcher.added_qasc_corpus_facts:
+                    fact1_retrieved_count += 1
+                if d["original_facts"][1] in self.matcher.added_qasc_corpus_facts:
+                    fact2_retrieved_count += 1
+            logging.info(
+                f"{split}-Fact1 retrieved ratio: {fact1_retrieved_count / len(data)}"
+            )
+            logging.info(
+                f"{split}-Fact2 retrieved ratio: {fact2_retrieved_count / len(data)}"
+            )
+            logging.info(
+                f"{split}-retrieved length: {(fact1_retrieved_count + fact2_retrieved_count) / len(data)}"
+            )
+
     def generate_choice_str(self, choices: List[str]):
         result = ""
         for label, choice in zip(self.generate_labels(), choices):
@@ -443,7 +467,12 @@ class QASCAugmentDataset(QASCBaseDataset):
                 [", ".join(self.get_augment_context(split, data["id"]))]
                 * len(data["choices"]),
                 [
-                    self.normalize_question(data["text_question"]) + " " + ch
+                    "Q: "
+                    + self.normalize_question(data["text_question"])
+                    + " Choices: "
+                    + ", ".join([c.replace(",", "") for c in data["choices"]])
+                    + " A: "
+                    + ch
                     for ch in data["choices"]
                 ],
                 truncation="only_first",

@@ -363,7 +363,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
     def __getitem__(self, data_idx):
         try:
             print(f"Processing idx = {data_idx}")
-            if self.data[data_idx][0] != "3Y4W8Q93LZJOKV84ZFFFU5C6KYBVDN":
+            if self.data[data_idx][0] != "3H7Z272LX76UDNZ0QK447QVTCYVLPQ":
                 if self.data[data_idx][0] in self.existing_ids:
                     print(f"Skipping idx = {data_idx}, id = {self.data[data_idx][0]}")
                     return self.data[data_idx][0], None, 0

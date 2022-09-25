@@ -1,7 +1,7 @@
 {
     "configs": [
         {
-            "base_type": "microsoft/deberta-v3-base",
+            "base_type": "cross-encoder/ms-marco-MiniLM-L-6-v2",
             "batch_size": 1,
             "epochs": 20,
             "negative_samples": 31,

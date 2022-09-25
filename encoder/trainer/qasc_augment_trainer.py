@@ -6,7 +6,7 @@ import warnings
 import torch as t
 import multiprocessing
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import (
     T5ForConditionalGeneration,
@@ -90,8 +90,11 @@ class QASCAugmentTrainer(pl.LightningModule):
         return self._real_device or self.device
 
     def train_dataloader(self):
+        gen = t.Generator()
+        gen.manual_seed(42)
         return DataLoader(
             dataset=self.dataset.train_dataset,
+            sampler=RandomSampler(self.dataset.train_dataset, generator=gen),
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,

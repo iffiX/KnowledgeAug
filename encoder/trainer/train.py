@@ -162,7 +162,7 @@ def _train(
         }
         plugins.append(DeepSpeedPlugin(**deepspeed_configs))
     elif is_distributed:
-        plugins.append(DDPPlugin(find_unused_parameters=True))
+        plugins.append(DDPPlugin(find_unused_parameters=False))
 
     logging.info(f"Precision: {config.precision}")
 

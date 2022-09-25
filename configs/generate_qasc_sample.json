@@ -21,7 +21,7 @@
     ],
     "override_saved_config": {"0": {"max_steps": 2, "beam_size": 5, "max_inference_num": 50000, "inference_batch_size": 512}},
     "early_stopping_patience": 15,
-    "gpus": [0, 1, 2, 3, 4],
+    "gpus": [0, 1, 2, 3, 4, 5, 6, 7],
     "stages": [
         "qasc_sample"
     ],
