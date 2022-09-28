@@ -352,19 +352,40 @@ class QASCBaseDataset:
         ):
             fact1_retrieved_count = 0
             fact2_retrieved_count = 0
+            fact1_allowed_count = 0
+            fact2_allowed_count = 0
             for d in data:
                 if d["original_facts"][0] in self.matcher.added_qasc_corpus_facts:
                     fact1_retrieved_count += 1
                 if d["original_facts"][1] in self.matcher.added_qasc_corpus_facts:
                     fact2_retrieved_count += 1
+                if (
+                    self.matcher.fact_to_composite_node.get(d["original_facts"][0], -1)
+                    in self.matcher.allowed_composite_nodes[d["id"]]
+                ):
+                    fact1_allowed_count += 1
+                if (
+                    self.matcher.fact_to_composite_node.get(d["original_facts"][1], -1)
+                    in self.matcher.allowed_composite_nodes[d["id"]]
+                ):
+                    fact2_allowed_count += 1
             logging.info(
-                f"{split}-Fact1 retrieved ratio: {fact1_retrieved_count / len(data)}"
+                f"All facts: {split}-Fact1 retrieved ratio: {fact1_retrieved_count / len(data)}"
             )
             logging.info(
-                f"{split}-Fact2 retrieved ratio: {fact2_retrieved_count / len(data)}"
+                f"All facts: {split}-Fact2 retrieved ratio: {fact2_retrieved_count / len(data)}"
             )
             logging.info(
-                f"{split}-retrieved length: {(fact1_retrieved_count + fact2_retrieved_count) / len(data)}"
+                f"All facts: {split}-retrieved length: {(fact1_retrieved_count + fact2_retrieved_count) / len(data)}"
+            )
+            logging.info(
+                f"Allowed facts: {split}-Fact1 retrieved ratio: {fact1_allowed_count / len(data)}"
+            )
+            logging.info(
+                f"Allowed facts: {split}-Fact2 retrieved ratio: {fact2_allowed_count / len(data)}"
+            )
+            logging.info(
+                f"Allowed facts: {split}-retrieved length: {(fact1_allowed_count + fact2_allowed_count) / len(data)}"
             )
 
     def generate_choice_str(self, choices: List[str]):

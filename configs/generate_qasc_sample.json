@@ -1,25 +1,27 @@
 {
     "configs": [
         {
-            "base_type": "cross-encoder/ms-marco-MiniLM-L-6-v2",
+            "base_type": "microsoft/deberta-v3-large",
             "batch_size": 1,
             "epochs": 20,
-            "negative_samples": 31,
+            "negative_samples": 15,
             "learning_rate": 5e-6,
-            "inference_batch_size": 512,
+            "inference_batch_size": 128,
             "load": false,
             "max_seq_length": 256,
             "pad_by_longest": true,
             "min_logits": -2,
             "max_steps": 2,
             "max_depth": 2,
+            "max_inference_num": 50000,
+            "beam_size": 5,
             "optimizer_class": "AdamW",
             "state_delimeter": ", ",
             "seed": 697474,
             "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_steps": 2, "beam_size": 5, "max_inference_num": 50000, "inference_batch_size": 512}},
+    "override_saved_config": {"0": {}},
     "early_stopping_patience": 15,
     "gpus": [0, 1, 2, 3, 4, 5, 6, 7],
     "stages": [

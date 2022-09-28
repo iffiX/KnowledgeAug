@@ -42,7 +42,7 @@ class RewardPredictorDatasetCreator:
             _, target_nodes = self.matcher.match_source_and_target_nodes(
                 self.data[data_idx][0], self.data[data_idx][2]
             )
-            state = self.data[data_idx][0] + " " + self.data[data_idx][1] + " /n "
+            state = self.data[data_idx][0] + " " + self.data[data_idx][1] + " Explain: "
             transitions = []
 
             if len(result[0]) > 0:
@@ -334,6 +334,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         inference_batch_size: int = 128,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        parallel: bool = True,
         stop_when_reaching_target_nodes: bool = True,
     ):
         """
@@ -355,6 +356,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         self.inference_batch_size = inference_batch_size
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
+        self.parallel = parallel
         self.stop_when_reaching_target_nodes = stop_when_reaching_target_nodes
 
     def __len__(self):
@@ -377,7 +379,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
             target_nodes_set = set(target_nodes)
             visited_nodes = []
             current_reached_nodes = source_nodes
-            state = self.data[data_idx][1] + " " + self.data[data_idx][2] + " /n "
+            state = self.data[data_idx][1] + " " + self.data[data_idx][2] + " Explain: "
 
             # for profiling
             inferenced_action_num = 0
@@ -462,6 +464,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                                 target_nodes,
                                 length,
                                 self.data[data_idx][0],
+                                self.parallel,
                             )
                             annotations = [
                                 self.state_delimiter.join(sub_path_annotations)
@@ -620,13 +623,14 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         return all_masked, log_prob
 
     def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes, length, _id
+        self, visited_nodes, current_reached_nodes, target_nodes, length, _id, parallel
     ):
         return self.matcher.find_available_choices(
             visited_nodes,
             current_reached_nodes,
             target_nodes,
             max_depth=self.max_depth,
+            parallel=parallel,
         )
 
     @staticmethod
@@ -723,13 +727,30 @@ class RewardPredictorBestFirstBeamSearchDatasetWithFilter(
     RewardPredictorBestFirstBeamSearchDataset
 ):
     def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes, length, _id
+        self, visited_nodes, current_reached_nodes, target_nodes, length, _id, parallel
     ):
         return self.matcher.find_available_choices(
             visited_nodes,
             current_reached_nodes,
             target_nodes,
+            parallel=parallel,
             max_depth=self.max_depth,
             filter_composite_nodes_by_f_beta=True,
             minimum_f_beta=0.35,
+        )
+
+
+class RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes(
+    RewardPredictorBestFirstBeamSearchDataset
+):
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes, length, _id, parallel
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            parallel=parallel,
+            max_depth=self.max_depth,
+            allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
         )

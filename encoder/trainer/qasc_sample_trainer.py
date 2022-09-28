@@ -25,6 +25,7 @@ from encoder.dataset.sample import (
     RewardPredictorDatasetCreatorWithFilter,
     RewardPredictorDataset,
     RewardPredictorBestFirstBeamSearchDatasetWithFilter,
+    RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes,
 )
 from encoder.utils.config import QASCSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
@@ -307,7 +308,7 @@ class QASCSampleTrainer(pl.LightningModule):
     def create_sample_inference_dataloader_for_validate(self):
         data = self.dataset.validate_data
         return DataLoader(
-            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
+            dataset=RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes(
                 [
                     (
                         data[i]["id"],
@@ -328,6 +329,7 @@ class QASCSampleTrainer(pl.LightningModule):
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                parallel=not self.is_distributed,
                 stop_when_reaching_target_nodes=False,
             ),
             batch_size=1,
@@ -336,9 +338,14 @@ class QASCSampleTrainer(pl.LightningModule):
 
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
-            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
+            dataset=RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes(
                 [
-                    (d["id"], d["text_question"], ", ".join(d["choices"]),)
+                    (
+                        d["id"],
+                        "Q: " + d["text_question"],
+                        "Choices: "
+                        + ", ".join([c.replace(",", "") for c in d["choices"]]),
+                    )
                     for d in getattr(self.dataset, f"{split}_data")
                 ],
                 # [

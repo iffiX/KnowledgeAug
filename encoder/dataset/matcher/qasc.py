@@ -1,7 +1,6 @@
 import re
 import os
 import json
-import nltk
 import pickle
 import logging
 from tqdm import tqdm
@@ -60,6 +59,8 @@ class QASCMatcher(BaseMatcher):
         self.matcher.kb.disable_edges_of_relationships(["RelatedTo", "HasContext"])
 
         self.added_qasc_corpus_facts = None
+        self.allowed_composite_nodes = {}
+        self.fact_to_composite_node = {}
         self.add_qasc_corpus()
 
     def add_qasc_facts(self, train_and_validate=False):
@@ -74,11 +75,12 @@ class QASCMatcher(BaseMatcher):
                 if not train_and_validate
                 else [self.qasc.train_path, self.qasc.validate_path,]
             )
+            question_facts = {}
             for dataset_path in paths:
                 with open(dataset_path, "r") as file:
                     for line in file:
                         entry = json.loads(line)
-                        added.add(
+                        fact1 = (
                             entry["fact1"]
                             .strip("\n")
                             .strip(".")
@@ -87,7 +89,7 @@ class QASCMatcher(BaseMatcher):
                             .strip(",")
                             .lower()
                         )
-                        added.add(
+                        fact2 = (
                             entry["fact2"]
                             .strip("\n")
                             .strip(".")
@@ -96,14 +98,17 @@ class QASCMatcher(BaseMatcher):
                             .strip(",")
                             .lower()
                         )
+                        added.add(fact1)
+                        added.add(fact2)
+                        question_facts[entry["id"]] = (fact1, fact2)
             knowledge = list(added)
-            result = [
+            tokens = [
                 (fact, ids, mask)
                 for fact, (ids, mask) in zip(
                     knowledge, self.parallel_tokenize_and_mask(knowledge)
                 )
             ]
-            return result
+            return question_facts, tokens
 
         count = 0
         with PickleCache(
@@ -113,12 +118,27 @@ class QASCMatcher(BaseMatcher):
             ),
             generate,
         ) as cache:
-            for knowledge, ids, mask in tqdm(cache.data):
+            question_facts, tokens = cache.data
+
+            for knowledge, ids, mask in tqdm(tokens):
                 if knowledge not in self.added_qasc_corpus_facts:
                     count += 1
-                    self.matcher.kb.add_composite_node(
+                    self.fact_to_composite_node[
+                        knowledge
+                    ] = self.matcher.kb.add_composite_node(
                         knowledge, "RelatedTo", ids, mask
                     )
+
+            for question_id, question_allowed_facts in question_facts.items():
+                self.allowed_composite_nodes[question_id] = list(
+                    set(
+                        self.allowed_composite_nodes[question_id]
+                        + [
+                            self.fact_to_composite_node[f]
+                            for f in question_allowed_facts
+                        ]
+                    )
+                )
         logging.info(f"Added {count} composite nodes")
 
     def add_qasc_corpus(self):
@@ -128,20 +148,25 @@ class QASCMatcher(BaseMatcher):
             os.path.join(preprocess_cache_dir, "qasc_matcher_filtered_corpus.data")
         ):
 
+            questions = []
+            question_ids = []
+            for dataset_path in (
+                self.qasc.train_path,
+                self.qasc.validate_path,
+                self.qasc.test_path,
+            ):
+                with open(dataset_path, "r") as file:
+                    for line in file:
+                        entry = json.loads(line)
+                        question_ids.append(entry["id"])
+                        questions.append(entry["question"]["stem"])
+
             def generate_first_level_facts():
-                questions = []
-                for dataset_path in (
-                    self.qasc.train_path,
-                    self.qasc.validate_path,
-                    self.qasc.test_path,
-                ):
-                    with open(dataset_path, "r") as file:
-                        for line in file:
-                            entry = json.loads(line)
-                            questions.append(entry["question"]["stem"])
                 with open(self.qasc.corpus_path, "r") as file:
                     raw_facts = [line.strip("\n") for line in file]
-                fact_selector = FactSelector(questions, raw_facts, min_score=0.55)
+                fact_selector = FactSelector(
+                    questions, raw_facts, min_score=0.5, max_facts=100
+                )
                 return {
                     "queries": questions,
                     "query_facts": fact_selector.selected_facts,
@@ -149,12 +174,10 @@ class QASCMatcher(BaseMatcher):
                 }
 
             with JSONCache(
-                os.path.join(
-                    preprocess_cache_dir, "qasc_matcher_first_level_facts.json"
-                ),
+                os.path.join(preprocess_cache_dir, "qasc_matcher_facts.json"),
                 generate_first_level_facts,
             ) as cache:
-                first_level_facts = list(
+                facts = list(
                     set(
                         [
                             f.strip("\n")
@@ -164,92 +187,51 @@ class QASCMatcher(BaseMatcher):
                             .strip(",")
                             .lower()
                             for facts in cache.data["query_facts"]
-                            for f in facts[:50]
+                            for f in facts[:100]
                         ]
                     )
                 )
 
-            # def generate_second_level_facts():
-            #     list_of_choices = []
-            #     queries = []
-            #     for dataset_path in (
-            #         self.qasc.train_path,
-            #         self.qasc.validate_path,
-            #         self.qasc.test_path,
-            #     ):
-            #         with open(dataset_path, "r") as file:
-            #             for line in file:
-            #                 entry = json.loads(line)
-            #                 for choice in entry["question"]["choices"]:
-            #                     queries.append(
-            #                         entry["question"]["stem"].strip("?")
-            #                         + " "
-            #                         + choice["text"]
-            #                     )
-            #     with open(self.qasc.corpus_path, "r") as file:
-            #         raw_facts = [line.strip("\n") for line in file]
-            #     fact_selector = FactSelector(queries, raw_facts, min_score=0.55)
-            #     return {
-            #         "queries": queries,
-            #         "query_facts": fact_selector.selected_facts,
-            #         "query_facts_rank": fact_selector.selected_facts_rank,
-            #     }
-            #
-            # with JSONCache(
-            #     os.path.join(
-            #         preprocess_cache_dir, "qasc_matcher_second_level_facts.json"
-            #     ),
-            #     generate_second_level_facts,
-            # ) as cache:
-            #     second_level_facts = list(
-            #         set(
-            #             [
-            #                 f.strip("\n")
-            #                 .strip(".")
-            #                 .strip('"')
-            #                 .strip("'")
-            #                 .strip(",")
-            #                 .lower()
-            #                 for facts in cache.data["query_facts"]
-            #                 for f in facts[:5]
-            #             ]
-            #         )
-            #     )
-            # facts = list(set(first_level_facts + second_level_facts))
-            facts = list(set(first_level_facts))
-            self.added_qasc_corpus_facts = set(facts)
-
             def generate_filtered_qasc_corpus_tokens():
-                result = [
+                fact_selector = FactSelector(
+                    questions, facts, min_score=0.4, max_facts=5000
+                )
+                tokens = [
                     (fact, ids, mask)
                     for fact, (ids, mask) in zip(
                         facts, self.parallel_tokenize_and_mask(facts)
                     )
                 ]
-                return result
+                return question_ids, fact_selector.selected_facts, tokens
 
             with PickleCache(
                 os.path.join(preprocess_cache_dir, "qasc_matcher_filtered_corpus.data"),
                 generate_filtered_qasc_corpus_tokens,
             ) as cache:
-                for knowledge, ids, mask in tqdm(cache.data):
-                    self.matcher.kb.add_composite_node(
-                        knowledge, "RelatedTo", ids, mask
-                    )
-                logging.info(f"Added {len(cache.data)} composite nodes")
+                filtered_corpus = cache.data
         else:
             with open(
                 os.path.join(preprocess_cache_dir, "qasc_matcher_filtered_corpus.data"),
                 "rb",
             ) as file:
-                data = pickle.load(file)
-                self.added_qasc_corpus_facts = set()
-                for knowledge, ids, mask in tqdm(data):
-                    self.matcher.kb.add_composite_node(
-                        knowledge, "RelatedTo", ids, mask
-                    )
-                    self.added_qasc_corpus_facts.add(knowledge)
-                logging.info(f"Added {len(data)} composite nodes")
+
+                filtered_corpus = pickle.load(file)
+
+        question_ids, list_of_question_allowed_facts, tokens = filtered_corpus
+
+        self.added_qasc_corpus_facts = set()
+        for knowledge, ids, mask in tqdm(tokens):
+            self.added_qasc_corpus_facts.add(knowledge)
+            self.fact_to_composite_node[knowledge] = self.matcher.kb.add_composite_node(
+                knowledge, "RelatedTo", ids, mask
+            )
+        for question_id, question_allowed_facts in zip(
+            question_ids, list_of_question_allowed_facts
+        ):
+            self.allowed_composite_nodes[question_id] = [
+                self.fact_to_composite_node[f] for f in question_allowed_facts[:3000]
+            ]
+        logging.info(f"Added {len(tokens)} composite nodes")
 
     def __reduce__(self):
         return QASCMatcher, (self.tokenizer,)
