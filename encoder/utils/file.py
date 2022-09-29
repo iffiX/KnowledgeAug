@@ -10,6 +10,7 @@ import logging
 import requests
 import torch
 from tqdm.auto import tqdm
+from multiprocessing.pool import ThreadPool
 
 
 def open_file_with_create_directories(path, mode):
@@ -152,30 +153,59 @@ class JSONCache(SafeCacheBase):
 
 
 class JSONStreamCache(SafeCacheBase):
-    def __init__(self, path, generate_ids, generate_from_id_func, validate_func=None):
+    def __init__(
+        self,
+        path,
+        generate_ids,
+        generate_from_id_func,
+        validate_func=None,
+        multi_threading=True,
+        threads=16,
+    ):
         self.path = path
         self.generate_ids = set(generate_ids)
         self.generate_from_id_func = generate_from_id_func
         self.generated_partial_data = {}
+        self.multi_threading = multi_threading
+        self.threads = threads
         super(JSONStreamCache, self).__init__(
             path=path, generate_func=self.stream_generate, validate_func=validate_func
         )
 
     def stream_generate(self):
         with open(self.path, "a", buffering=1 << 20, encoding="utf-8") as f:
-            for id_ in tqdm(
-                list(
-                    self.generate_ids.difference(
-                        set(self.generated_partial_data.keys())
+            need_generate_ids = list(
+                self.generate_ids.difference(set(self.generated_partial_data.keys()))
+            )
+            if self.multi_threading:
+
+                def generate_wrapper(id_):
+                    return id_, self.generate_from_id_func(id_)
+
+                with ThreadPool(processes=self.threads) as pool, tqdm(
+                    total=len(need_generate_ids)
+                ) as pbar:
+                    for id_, generated_data in pool.imap_unordered(
+                        generate_wrapper, need_generate_ids,
+                    ):
+                        pbar.update()
+                        f.write(
+                            json.dumps(
+                                {"id": id_, "data": generated_data}, ensure_ascii=False,
+                            )
+                            + "\n"
+                        )
+                        self.generated_partial_data[id_] = generated_data
+            else:
+                for id_ in tqdm(need_generate_ids):
+                    generated_data = self.generate_from_id_func(id_)
+                    f.write(
+                        json.dumps(
+                            {"id": id_, "data": generated_data}, ensure_ascii=False,
+                        )
+                        + "\n"
                     )
-                )
-            ):
-                generated_data = self.generate_from_id_func(id_)
-                f.write(
-                    json.dumps({"id": id_, "data": generated_data}, ensure_ascii=False,)
-                    + "\n"
-                )
-                self.generated_partial_data[id_] = generated_data
+                    self.generated_partial_data[id_] = generated_data
         full_data, self.generated_partial_data = self.generated_partial_data, {}
         return full_data
 

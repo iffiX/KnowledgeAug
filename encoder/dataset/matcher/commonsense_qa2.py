@@ -15,7 +15,7 @@ from encoder.utils.file import PickleCache
 from encoder.utils.settings import preprocess_cache_dir, dataset_cache_dir
 
 
-class CommonsenseQAMatcher(BaseMatcher):
+class CommonsenseQA2Matcher(BaseMatcher):
     def __init__(
         self, tokenizer: PreTrainedTokenizerBase,
     ):
@@ -56,153 +56,57 @@ class CommonsenseQAMatcher(BaseMatcher):
         else:
             matcher = KnowledgeMatcher(archive_path)
 
-        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
+        super(CommonsenseQA2Matcher, self).__init__(tokenizer, matcher)
         self.matcher.kb.disable_edges_with_weight_below(1)
+        self.allowed_composite_nodes = {}
+        self.allowed_facts = {}
 
-        self.add_generics_kb()
-        self.add_commonsense_qa_dataset()
-        # self.add_openbook_qa_knowledge()
-
-    def add_question_specific_knowledge(self, question_specific_knowledge: List[str]):
-        logging.info("Adding question specific knowledge")
-        added = set()
-        for knowledge in question_specific_knowledge:
-            knowledge = (
-                knowledge.strip(".")
-                .replace("(", ",")
-                .replace(")", ",")
-                .replace(";", ",")
-                .replace('"', " ")
-                .lower()
-            )
-            if knowledge not in added:
-                added.add(knowledge)
-                ids, mask = self.tokenize_and_mask(knowledge)
-                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-        logging.info(f"Added {len(added)} composite nodes")
-
-    def add_commonsense_qa_dataset(self):
-        logging.info("Adding Commonsense QA dataset")
-        count = 0
-        for dataset_path in (
-            self.commonsense_qa.train_path,
-            # self.commonsense_qa.validate_path,
-        ):
-            with open(dataset_path, "r") as file:
-                for line in file:
-                    sample = json.loads(line)
-                    correct_choice = [
-                        c["text"]
-                        for c in sample["question"]["choices"]
-                        if c["label"] == sample["answerKey"]
-                    ][0]
-                    line = sample["question"]["stem"] + " " + correct_choice
-                    if line.count(".") >= 3:
-                        continue
-                    count += 1
-                    ids, mask = self.tokenize_and_mask(line)
-                    self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-        logging.info(f"Added {count} composite nodes")
-
-    def add_generics_kb(self):
-        logging.info("Adding generics kb")
-        path = str(os.path.join(dataset_cache_dir, "generics_kb"))
-        if not os.path.exists(os.path.dirname(path)):
-            os.makedirs(path, exist_ok=True)
-        if not os.path.exists(
-            os.path.join(path, "GenericsKB-Best.tsv")
-        ) and not os.path.isfile(path):
-            logging.info("Skipping loading generics_kb because file is not loaded")
-            logging.info(
-                f"Please download GenericsKB-Best.tsv "
-                f"from https://drive.google.com/drive/folders/1vqfVXhJXJWuiiXbUa4rZjOgQoJvwZUoT "
-                f"to path {os.path.join(path, 'GenericsKB-Best.tsv')}"
-            )
-            return
+    def add_external_knowledge(
+        self, external_knowledge: List[str], allowed_ids: List[str]
+    ):
+        logging.info("Adding external knowledge")
 
         def generate():
             added = set()
-            logging.info(f"Preprocessing generics_kb")
-            gkb = datasets.load_dataset(
-                "generics_kb", "generics_kb_best", data_dir=path,
-            )
-            for entry in tqdm(gkb["train"]):
-                if (
-                    "ConceptNet" in entry["source"]
-                    or "WordNet" in entry["source"]
-                    or "TupleKB" in entry["source"]
-                    or entry["generic_sentence"].count(" ") < 3
-                ):
-                    continue
-                knowledge = (
-                    entry["generic_sentence"]
-                    .strip(".")
-                    .replace("(", ",")
-                    .replace(")", ",")
-                    .replace(";", ",")
-                    .replace('"', " ")
-                    .lower()
-                )
+            for knowledge in external_knowledge:
+                knowledge = knowledge.strip(".").replace('"', " ").lower()
                 if knowledge not in added:
                     added.add(knowledge)
-            added = list(added)
-            result = [
-                (knowledge, ids, mask)
-                for knowledge, (ids, mask) in zip(
-                    added, self.parallel_tokenize_and_mask(added)
+            added_knowledge = list(sorted(added))
+            tokens = [
+                (knowledge, token_ids, token_mask)
+                for knowledge, (token_ids, token_mask) in zip(
+                    added_knowledge, self.parallel_tokenize_and_mask(added_knowledge)
                 )
             ]
-            return result
+            return hash("".join(external_knowledge)), tokens
+
+        def validate(data):
+            return hash("".join(external_knowledge)) == data[0]
 
         with PickleCache(
             os.path.join(
-                preprocess_cache_dir, "commonsense_qa_generics_kb_knowledge.data"
+                preprocess_cache_dir, "commonsense_qa2_matcher_external_knowledge.data"
             ),
-            generate_func=generate,
+            generate,
+            validate_func=validate,
         ) as cache:
-            # rand = random.Random(42)
-            # to_be_added = copy.deepcopy(cache.data)
-            # rand.shuffle(to_be_added)
-            # to_be_added = to_be_added[:100000]
-            to_be_added = copy.deepcopy(cache.data)
-            for knowledge, ids, mask in tqdm(to_be_added):
-                self.matcher.kb.add_composite_node(knowledge, "RelatedTo", ids, mask)
-            logging.info(f"Added {len(to_be_added)} composite nodes")
-
-    # def add_openbook_qa_knowledge(self):
-    #     logging.info("Adding OpenBook QA knowledge")
-    #     openbook_qa_path = os.path.join(
-    #         dataset_cache_dir, "openbook_qa", "OpenBookQA-V1-Sep2018", "Data"
-    #     )
-    #     openbook_qa_facts_path = os.path.join(openbook_qa_path, "Main", "openbook.txt")
-    #     crowd_source_facts_path = os.path.join(
-    #         openbook_qa_path, "Additional", "crowdsourced-facts.txt"
-    #     )
-    #     qasc_additional_path = os.path.join(preprocess_cache_dir, "qasc_additional.txt")
-    #     manual_additional_path = os.path.join(
-    #         preprocess_cache_dir, "manual_additional.txt"
-    #     )
-    #     count = 0
-    #     for path in (
-    #         openbook_qa_facts_path,
-    #         crowd_source_facts_path,
-    #         # qasc_additional_path,
-    #         manual_additional_path,
-    #     ):
-    #         with open(path, "r") as file:
-    #             for line in file:
-    #                 line = line.strip("\n").strip(".").strip('"').strip("'").strip(",")
-    #                 if len(line) < 3:
-    #                     continue
-    #                 count += 1
-    #                 ids, mask = self.tokenize_and_mask(line)
-    #                 self.matcher.kb.add_composite_node(line, "RelatedTo", ids, mask)
-    #     logging.info(f"Added {count} composite nodes")
-
-    #
+            hash_value, tokens = cache.data
+            for allowed_id, (knowledge, token_ids, token_mask) in tqdm(
+                zip(allowed_ids, tokens)
+            ):
+                node_id = self.matcher.kb.add_composite_node(
+                    knowledge, "RelatedTo", token_ids, token_mask
+                )
+                if allowed_id not in self.allowed_composite_nodes:
+                    self.allowed_composite_nodes[allowed_id] = []
+                    self.allowed_facts[allowed_id] = []
+                self.allowed_composite_nodes[allowed_id].append(node_id)
+                self.allowed_facts[allowed_id].append(knowledge)
+            logging.info(f"Added {len(tokens)} composite nodes")
 
     def __reduce__(self):
         return (
-            CommonsenseQAMatcher,
+            CommonsenseQA2Matcher,
             (self.tokenizer,),
         )

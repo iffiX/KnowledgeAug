@@ -6,6 +6,7 @@ import pytorch_lightning as pl
 from ..utils.config import *
 from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
 from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
+from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
 from .openbook_qa_trainer import OpenBookQATrainer
 from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
@@ -22,6 +23,7 @@ from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 stage_name_to_trainer_map = {
     "commonsense_qa_sample": CommonsenseQASampleTrainer,
     "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
+    "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,
     "openbook_qa": OpenBookQATrainer,
     "openbook_qa_sample": OpenBookQASampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,

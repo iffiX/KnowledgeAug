@@ -327,6 +327,14 @@ vector<string> KnowledgeBase::getNodes(const vector<long> &nodeIndexes) const {
     return result;
 }
 
+long KnowledgeBase::getCompositeStart() const {
+    for (long i = 0; i < isNodeComposite.size(); i++) {
+        if (isNodeComposite[i])
+            return i;
+    }
+    return isNodeComposite.size();
+}
+
 long KnowledgeBase::addCompositeNode(const string &compositeNode,
                                      const string &relationship,
                                      const vector<int> &tokenizedCompositeNode,

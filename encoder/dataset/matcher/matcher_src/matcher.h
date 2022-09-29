@@ -154,6 +154,8 @@ public:
 
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
 
+    long getCompositeStart() const;
+
     long addCompositeNode(const std::string &compositeNode,
                           const std::string &relationship,
                           const std::vector<int> &tokenizedCompositeNode,

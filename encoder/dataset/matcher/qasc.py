@@ -177,18 +177,20 @@ class QASCMatcher(BaseMatcher):
                 os.path.join(preprocess_cache_dir, "qasc_matcher_facts.json"),
                 generate_first_level_facts,
             ) as cache:
-                facts = list(
-                    set(
-                        [
-                            f.strip("\n")
-                            .strip(".")
-                            .strip('"')
-                            .strip("'")
-                            .strip(",")
-                            .lower()
-                            for facts in cache.data["query_facts"]
-                            for f in facts[:100]
-                        ]
+                facts = sorted(
+                    list(
+                        set(
+                            [
+                                f.strip("\n")
+                                .strip(".")
+                                .strip('"')
+                                .strip("'")
+                                .strip(",")
+                                .lower()
+                                for facts in cache.data["query_facts"]
+                                for f in facts[:100]
+                            ]
+                        )
                     )
                 )
 
@@ -214,7 +216,6 @@ class QASCMatcher(BaseMatcher):
                 os.path.join(preprocess_cache_dir, "qasc_matcher_filtered_corpus.data"),
                 "rb",
             ) as file:
-
                 filtered_corpus = pickle.load(file)
 
         question_ids, list_of_question_allowed_facts, tokens = filtered_corpus

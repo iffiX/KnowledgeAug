@@ -64,6 +64,7 @@ PYBIND11_MODULE(matcher, m) {
             .def("get_edges", &KnowledgeBase::getEdges)
             .def("get_nodes", py::overload_cast<>(&KnowledgeBase::getNodes, py::const_))
             .def("get_nodes", py::overload_cast<const std::vector<long> &>(&KnowledgeBase::getNodes, py::const_))
+            .def("get_composite_start", &KnowledgeBase::getCompositeStart)
             .def("add_composite_node", &KnowledgeBase::addCompositeNode,
                  py::arg("composite_node"),
                  py::arg("relationship"),

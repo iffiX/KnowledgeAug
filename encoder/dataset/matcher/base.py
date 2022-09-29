@@ -147,6 +147,7 @@ class BaseMatcher:
             re.sub("\(|\)|<|>", "", self.STANDARD_TEMPLATES[rel])
             for rel in matcher.kb.relationships
         ]
+        self.composite_start = self.matcher.kb.get_composite_start()
 
     def find_closest_concept(self, target_concept: str, concepts: List[str]):
         if self.nlp is None:
@@ -270,10 +271,15 @@ class BaseMatcher:
     def sub_paths_to_annotations(
         self,
         sub_paths: List[List[Edge]],
+        decoded_sub_paths: List[str] = None,
         templates: Union[str, List[str]] = "natural",
         prioritize_original_annotation: bool = True,
         lower_case: bool = True,
     ) -> List[List[str]]:
+        """
+        In case the tokenized corpus is missing, causing the order of composite nodes to shift,
+        use decoded_sub_paths to recover original information
+        """
         if isinstance(templates, str):
             if templates == "natural":
                 templates = self.natural_relationship_templates
@@ -285,12 +291,60 @@ class BaseMatcher:
                 prioritize_original_annotation = False
             else:
                 raise ValueError(f"Unknown templates configuration: {templates}")
-        return self.matcher.sub_paths_to_annotations(
-            sub_paths,
-            templates,
-            prioritize_original_annotation=prioritize_original_annotation,
-            lower_case=lower_case,
-        )
+        if decoded_sub_paths is None:
+            return self.matcher.sub_paths_to_annotations(
+                sub_paths,
+                templates,
+                prioritize_original_annotation=prioritize_original_annotation,
+                lower_case=lower_case,
+            )
+        else:
+            formatted_sub_paths = []
+            for path, decoded_path in zip(sub_paths, decoded_sub_paths):
+                formatted_path = []
+                start = 0
+                for edge_idx, edge in enumerate(path):
+                    # because the period will only appear in the last composite node
+                    # or between edges
+                    # If not found, -1 is fine for using the whole string
+                    decoded_edge_end = decoded_path.find(", ", start)
+
+                    if edge_idx == len(path) - 1:
+                        decoded_edge_end = len(decoded_path)
+                    decoded_edge = decoded_path[start:decoded_edge_end]
+                    start = decoded_edge_end + len(", ")
+                    if (
+                        edge[0] < self.composite_start
+                        and edge[2] < self.composite_start
+                    ):
+                        formatted_path.append(
+                            self.matcher.sub_paths_to_annotations(
+                                [[edge]],
+                                templates,
+                                prioritize_original_annotation=prioritize_original_annotation,
+                                lower_case=lower_case,
+                            )[0][0]
+                        )
+                    else:
+                        assert self.matcher.kb.relationships[edge[1]] == "RelatedTo"
+                        first_node = decoded_edge[
+                            : decoded_edge.find("related to")
+                        ].strip(" ")
+                        second_node = decoded_edge[
+                            decoded_edge.find("related to") + len("related to ") :
+                        ].strip(" ")
+                        if lower_case:
+                            formatted_path.append(
+                                templates[edge[1]]
+                                .format(first_node, second_node)
+                                .lower()
+                            )
+                        else:
+                            formatted_path.append(
+                                templates[edge[1]].format(first_node, second_node)
+                            )
+                formatted_sub_paths.append(formatted_path)
+            return formatted_sub_paths
 
     def match_source_and_target_nodes(
         self,

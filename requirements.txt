@@ -25,3 +25,4 @@ periodictable
 chemparse
 sklearn
 openai
+requests

@@ -1,10 +1,9 @@
 import tqdm
 import logging
 import torch as t
-import torch.nn.functional as F
 from torch import multiprocessing
 from torch.multiprocessing.spawn import _wrap, ProcessContext
-from .embedder import Embedder
+from encoder.models.embedder import Embedder
 
 
 def start_processes_with_seperate_args(

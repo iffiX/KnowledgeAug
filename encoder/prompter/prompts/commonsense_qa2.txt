@@ -1,0 +1,39 @@
+Determine what to search for each query. Examples:
+
+Query: Greece is larger than mexico.
+Search: <Greece, land size> and <Mexico, land size>
+Starts: [Greece] and [Mexico]
+
+Query: A criminal is the same size as bacteria.
+Search: <human, size> and <bacteria, size>
+Starts: [human] and [bacteria]
+
+Query: A fish is capable of thinking.
+Search: <fish, capable of, thinking>.
+Starts: [fish, thinking]
+
+Query: A common effect of smoking lots of cigarettes in one's lifetime is a higher than normal chance of getting lung cancer.
+Search: <common effect, smoking, cigarattes, lung cancer>.
+Starts: [smoking, cigarattes, lung cancer]
+
+Query: There are six places in the world named Iowa.
+Search: <six places, named, Iowa>.
+Starts: [Iowa]
+
+Query: The peak of a mountain almost always reaches above the the tree line.
+Search: <mountain peak, always, above, tree line>.
+Starts: [mountain peak, tree line]
+
+Query: September has exactly the same amount of days as February.
+Search: <September, days> and <February, days>
+Starts: [September] and [Febuary]
+
+Query: At 33 degrees you are at least one degree from freezing water.
+Search: <freezing water, temperature>
+Starts: [freezing water]
+
+Query: The end of a baseball bat is larger than the handle.
+Search: <baseball bat, shape>
+Starts: [baseball bat]
+
+Query: {query}

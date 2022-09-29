@@ -236,45 +236,41 @@ class CommonsenseQA2:
     def __init__(self):
         commonsense_qa2_path = str(os.path.join(dataset_cache_dir, "commonsense_qa2"))
         self.train_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "train_complete.jsonl",
+            commonsense_qa2_path, "teach_your_ai_train.json",
         )
         self.validate_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "dev_complete.jsonl",
+            commonsense_qa2_path, "teach_your_ai_dev.json"
         )
         self.test_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "test_complete.jsonl",
-        )
-        self.facts_path = os.path.join(
-            openbook_qa_path, "OpenBookQA-V1-Sep2018", "Data", "Main", "openbook.txt"
-        )
-        self.crowd_source_facts_path = os.path.join(
-            openbook_qa_path,
-            "OpenBookQA-V1-Sep2018",
-            "Data",
-            "Additional",
-            "crowdsourced-facts.txt",
+            commonsense_qa2_path, "teach_your_ai_text_no_answers.json"
         )
 
     def require(self):
-        openbook_qa_path = str(os.path.join(dataset_cache_dir, "openbook_qa"))
-        if not os.path.exists(openbook_qa_path):
-            if not os.path.exists(str(openbook_qa_path) + ".zip"):
-                logging.info("Downloading OpenBook QA")
-                download_to(self.OPENBOOK_QA_URL, str(openbook_qa_path) + ".zip")
+        commonsense_qa2_path = str(os.path.join(dataset_cache_dir, "commonsense_qa2"))
+        compressed_paths = [
+            str(os.path.join(commonsense_qa2_path, "CSQA2_train.json.gz")),
+            str(os.path.join(commonsense_qa2_path, "CSQA2_dev.json.gz")),
+            str(os.path.join(commonsense_qa2_path, "CSQA2_test_no_answers.json.gz")),
+        ]
+        if not os.path.exists(commonsense_qa2_path):
+            os.makedirs(commonsense_qa2_path, exist_ok=True)
+
+            if any([not os.path.exists(cmp) for cmp in compressed_paths]):
+                logging.info("Downloading CommonsenseQA2")
+                for url, path in zip(
+                    [
+                        self.COMMONSENSE_QA2_TRAIN_URL,
+                        self.COMMONSENSE_QA2_VALIDATE_URL,
+                        self.COMMONSENSE_QA2_TEST_URL,
+                    ],
+                    compressed_paths,
+                ):
+                    download_to(url, path)
             logging.info("Decompressing")
-            decompress_zip(str(openbook_qa_path) + ".zip", openbook_qa_path)
+            for cmp, target_path in zip(
+                compressed_paths, [self.train_path, self.validate_path, self.test_path]
+            ):
+                decompress_gz(cmp, target_path)
         return self
 
 
