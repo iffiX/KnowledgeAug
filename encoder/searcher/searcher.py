@@ -1,4 +1,5 @@
 import os
+import re
 import requests
 from typing import List
 from encoder.utils.file import JSONCache, JSONStreamCache
@@ -8,9 +9,6 @@ from encoder.utils.settings import preprocess_cache_dir
 class ScaleSerpSearcher:
     def __init__(self, query_name: str, queries: List[str]):
         self.queries = queries
-        if "SCALE_SERP_API_KEY" not in os.environ:
-            raise ValueError("SCALE_SERP_API_KEY not set in environment")
-        self.api_key = os.getenv("SCALE_SERP_API_KEY")
 
         with JSONStreamCache(
             os.path.join(
@@ -33,7 +31,8 @@ class ScaleSerpSearcher:
 
     def parse_data(self, data):
         result = []
-        for idx, entry in data.items():
+        for i in range(len(data)):
+            entry = data[i]
             knowledge = []
             if "knowledge_graph" in entry["result"]:
                 knowledge += self.parse_knowledge_graph(
@@ -69,15 +68,31 @@ class ScaleSerpSearcher:
         ]
 
     def parse_organic_results(self, organic_results):
-        return [
-            organic_result["title"] + organic_result["snippet"]
-            for organic_result in organic_results
-            if "snippet" in organic_result
-        ]
+        result = []
+        for organic_result in organic_results:
+
+            if "snippet" in organic_result:
+                match = re.match(
+                    "^[a-zA-Z]+ [0-9]+, [0-9]+ — (.*)", organic_result["snippet"]
+                )
+                if match is not None:
+                    parsed = match.group(1)
+                else:
+                    parsed = organic_result["snippet"]
+                # if "title" in organic_result:
+                #     parsed = (
+                #         organic_result["title"][: organic_result["title"].find(" - ")]
+                #         + " | "
+                #         + parsed
+                #     )
+                result.append(parsed)
+        return result
 
     def generator(self, idx):
+        if "SCALE_SERP_API_KEY" not in os.environ:
+            raise ValueError("SCALE_SERP_API_KEY not set in environment")
         params = {
-            "api_key": self.api_key,
+            "api_key": os.getenv("SCALE_SERP_API_KEY"),
             "q": self.queries[idx],
             "gl": "us",
             "google_domain": "google.com",

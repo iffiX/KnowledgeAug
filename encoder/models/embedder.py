@@ -37,14 +37,19 @@ class Embedder:
             local_files_only=local_files_only,
         )
 
-    def embed(self, inputs, max_length=256):
+    def embed(self, inputs, max_length=256, batch_size=256):
         with t.no_grad():
-            batch = self.tokenizer(
-                inputs,
-                padding="longest",
-                max_length=max_length,
-                truncation=True,
-                return_tensors="pt",
-            ).to(self.device)
-            embedding = mean_pooling(self.model(**batch)[0], batch["attention_mask"])
-            return F.normalize(embedding, p=2, dim=1)
+            result = []
+            for start in range(0, len(inputs), batch_size):
+                batch = self.tokenizer(
+                    inputs[start : start + batch_size],
+                    padding="longest",
+                    max_length=max_length,
+                    truncation=True,
+                    return_tensors="pt",
+                ).to(self.device)
+                embedding = mean_pooling(
+                    self.model(**batch)[0], batch["attention_mask"]
+                )
+                result.append(F.normalize(embedding, p=2, dim=1))
+            return t.cat(result)

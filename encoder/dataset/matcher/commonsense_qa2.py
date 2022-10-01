@@ -1,10 +1,6 @@
 import re
 import os
-import copy
-import json
-import random
 import logging
-import datasets
 from tqdm import tqdm
 from typing import List
 from transformers import PreTrainedTokenizerBase
@@ -58,31 +54,22 @@ class CommonsenseQA2Matcher(BaseMatcher):
 
         super(CommonsenseQA2Matcher, self).__init__(tokenizer, matcher)
         self.matcher.kb.disable_edges_with_weight_below(1)
-        self.allowed_composite_nodes = {}
-        self.allowed_facts = {}
 
-    def add_external_knowledge(
-        self, external_knowledge: List[str], allowed_ids: List[str]
-    ):
+    def add_external_knowledge(self, external_knowledge: List[str]):
         logging.info("Adding external knowledge")
 
         def generate():
-            added = set()
-            for knowledge in external_knowledge:
-                knowledge = knowledge.strip(".").replace('"', " ").lower()
-                if knowledge not in added:
-                    added.add(knowledge)
-            added_knowledge = list(sorted(added))
+            added_knowledge = sorted(list(set(external_knowledge)))
             tokens = [
                 (knowledge, token_ids, token_mask)
                 for knowledge, (token_ids, token_mask) in zip(
                     added_knowledge, self.parallel_tokenize_and_mask(added_knowledge)
                 )
             ]
-            return hash("".join(external_knowledge)), tokens
+            return len(external_knowledge), tokens
 
         def validate(data):
-            return hash("".join(external_knowledge)) == data[0]
+            return len(external_knowledge) == data[0]
 
         with PickleCache(
             os.path.join(
@@ -92,17 +79,10 @@ class CommonsenseQA2Matcher(BaseMatcher):
             validate_func=validate,
         ) as cache:
             hash_value, tokens = cache.data
-            for allowed_id, (knowledge, token_ids, token_mask) in tqdm(
-                zip(allowed_ids, tokens)
-            ):
-                node_id = self.matcher.kb.add_composite_node(
+            for knowledge, token_ids, token_mask in tqdm(tokens):
+                self.matcher.kb.add_composite_node(
                     knowledge, "RelatedTo", token_ids, token_mask
                 )
-                if allowed_id not in self.allowed_composite_nodes:
-                    self.allowed_composite_nodes[allowed_id] = []
-                    self.allowed_facts[allowed_id] = []
-                self.allowed_composite_nodes[allowed_id].append(node_id)
-                self.allowed_facts[allowed_id].append(knowledge)
             logging.info(f"Added {len(tokens)} composite nodes")
 
     def __reduce__(self):

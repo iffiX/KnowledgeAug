@@ -77,7 +77,7 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
             )
         else:
             model_configs = config.model_configs or {}
-            self.model = Model(config.base_type, 5, **model_configs)
+            self.model = Model(config.base_type, 2, **model_configs)
         self._real_device = None
 
     @property
@@ -304,28 +304,48 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
                 query_ids.append(id_)
 
         searcher = ScaleSerpSearcher("commonsense_qa2", queries)
-        external_knowledge = [ssr for sr in searcher.search_result for ssr in sr]
-        allowed_query_ids = [
-            id_ for id_, sr in zip(query_ids, searcher.search_result) for _ in sr
+        search_result = [
+            [knowledge.strip(".").replace('"', " ").lower() for knowledge in sr]
+            for sr in searcher.search_result
         ]
+        external_knowledge = [knowledge for sr in search_result for knowledge in sr]
         matcher = dataset.matcher
-        matcher.add_external_knowledge(external_knowledge, allowed_query_ids)
+        matcher.add_external_knowledge(external_knowledge)
 
         embedder = Embedder()
 
         contexts = {}
-        for id_, facts in tqdm(
-            matcher.allowed_facts.items(), total=len(matcher.allowed_facts)
-        ):
+        id_to_searches = {}
+        id_to_facts = {}
+
+        for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
+            id_ = data["id"]
             hints = prompter.get_search_hints_of_id(id_)[0]
-            facts_embeddings = embedder.embed(matcher.allowed_facts[id_])
+            id_to_searches[id_] = [" ".join(search) for search in hints["search"]]
+
+        for id_, facts in tqdm(zip(query_ids, search_result), total=len(query_ids)):
+            if id_ not in id_to_facts:
+                id_to_facts[id_] = []
+            id_to_facts[id_] += facts
+
+        logging.info("Computing embeddings")
+        search_embeddings = self.embed_dict(id_to_searches, embedder)
+        facts_embeddings = self.embed_dict(id_to_facts, embedder)
+
+        logging.info("Finding best paths")
+        for id_ in tqdm(id_to_searches):
             contexts[id_] = []
-            for starts, search in zip(hints["starts"], hints["search"]):
-                search_embedding = embedder.embed([" ".join(search)])
-                best_fact_idx = t.argmax(
-                    search_embedding * facts_embeddings.transpose(0, 1), dim=1
-                ).item()
-                best_fact = matcher.allowed_facts[best_fact_idx]
+            if id_ not in search_embeddings or id_ not in facts_embeddings:
+                continue
+            hints = prompter.get_search_hints_of_id(id_)[0]
+            best_fact_indices = t.argmax(
+                t.mm(search_embeddings[id_], facts_embeddings[id_].transpose(0, 1)),
+                dim=1,
+            )
+            for starts, search, best_fact_idx in zip(
+                hints["starts"], hints["search"], best_fact_indices
+            ):
+                best_fact = id_to_facts[id_][best_fact_idx]
 
                 _, raw_path_edges, *__ = matcher.find_shortest_path(
                     source_sentence=", ".join(starts),
@@ -345,8 +365,7 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
 
         empty_count = 0
         for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
-            if data["id"] not in contexts:
-                contexts[data["id"]] = []
+            if not contexts[data["id"]]:
                 empty_count += 1
         total = (
             len(dataset.train_data)
@@ -357,3 +376,20 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
             f"{empty_count} contexts are empty, percent {empty_count * 100 / total:.2f} %"
         )
         return contexts
+
+    def embed_dict(self, dict, embedder):
+        all_strings = []
+        all_ids = []
+        for id_, strings in dict.items():
+            all_strings += strings
+            all_ids += [id_] * len(strings)
+
+        embeddings = embedder.embed(all_strings)
+        result = {}
+        for embed, id_ in zip(embeddings, all_ids):
+            if id_ not in result:
+                result[id_] = []
+            result[id_].append(embed)
+        for id_ in result:
+            result[id_] = t.stack(result[id_])
+        return result

@@ -16,7 +16,7 @@
         }
     ],
     "early_stopping_patience": 15,
-    "gpus": 0,
+    "gpus": [0],
     "stages": [
         "commonsense_qa2_augment"
     ],

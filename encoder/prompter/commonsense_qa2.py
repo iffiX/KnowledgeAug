@@ -28,9 +28,6 @@ class CommonsenseQA2Prompter:
                 self.dataset.test_data,
             )
         }
-        if "OPENAI_API_KEY" not in os.environ:
-            raise ValueError("OPENAI_API_KEY not set in environment")
-        openai.api_key = os.getenv("OPENAI_API_KEY")
 
         if not os.path.exists(
             os.path.join(preprocess_cache_dir, "commonsense_qa2_prompts.json")
@@ -195,6 +192,9 @@ class CommonsenseQA2Prompter:
 
     def generator(self, id_):
         data = self.generation_table[id_]
+        if "OPENAI_API_KEY" not in os.environ:
+            raise ValueError("OPENAI_API_KEY not set in environment")
+        openai.api_key = os.getenv("OPENAI_API_KEY")
         response = openai.Completion.create(
             model=self.MODEL,
             prompt=self.get_full_prompt(self.BASE_PROMPT, data["text_question"],),

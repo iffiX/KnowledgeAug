@@ -250,7 +250,7 @@ class CommonsenseQA2AugmentDataset(CommonsenseQA2BaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        augment_contexts: Tuple[Dict[str, List[str]]],
+        augment_contexts: Dict[str, List[str]],
         max_seq_length: int = 300,
         output_mode: str = "single",
     ):
@@ -270,7 +270,7 @@ class CommonsenseQA2AugmentDataset(CommonsenseQA2BaseDataset):
             ("test", self.test_data),
         ):
             found_count = sum(
-                1 for data in split_data if data["id"] in augment_contexts[0]
+                1 for data in split_data if data["id"] in augment_contexts
             )
             print(
                 f"{found_count}/{len(split_data)} samples of {split} split have contexts"
@@ -289,7 +289,7 @@ class CommonsenseQA2AugmentDataset(CommonsenseQA2BaseDataset):
         if self.output_mode == "single":
             encoded_sentence = self.tokenizer(
                 normalize_t5_input(
-                    ", ".join(self.get_augment_context(split, data["id"]))
+                    ", ".join(self.augment_contexts.get(data["id"], []))
                     + " \\n "
                     + data["text_question"]
                     + " \\n "
@@ -315,7 +315,7 @@ class CommonsenseQA2AugmentDataset(CommonsenseQA2BaseDataset):
             data["answer"] = answer
         else:
             encoded_sentence = self.tokenizer(
-                [", ".join(self.get_augment_context(split, data["id"]))]
+                [", ".join(self.augment_contexts.get(data["id"], []))]
                 * len(data["choices"]),
                 [
                     self.normalize_question(data["text_question"]) + " " + ch
@@ -336,6 +336,3 @@ class CommonsenseQA2AugmentDataset(CommonsenseQA2BaseDataset):
             return question.capitalize()
         else:
             return (question + ".").capitalize()
-
-    def get_augment_context(self, split, data_id, no_rand=False):
-        return self.augment_contexts[0].get(data_id, [])
