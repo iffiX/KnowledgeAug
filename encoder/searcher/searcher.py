@@ -1,7 +1,7 @@
 import os
 import re
 import requests
-from typing import List
+from typing import List, Tuple
 from encoder.utils.file import JSONCache, JSONStreamCache
 from encoder.utils.settings import preprocess_cache_dir
 
@@ -27,7 +27,7 @@ class ScaleSerpSearcher:
             self.parse_data,
             generate_args=(self.search_raw_result,),
         ) as cache:
-            self.search_result = cache.data
+            self.search_result = cache.data  # type: Tuple[str, str]
 
     def parse_data(self, data):
         result = []
@@ -51,18 +51,23 @@ class ScaleSerpSearcher:
 
     def parse_knowledge_graph(self, knowledge_graph):
         knowledge = (
-            [knowledge_graph["description"]] if "description" in knowledge_graph else []
+            [(knowledge_graph["description"], knowledge_graph["description"])]
+            if "description" in knowledge_graph
+            else []
         )
         for attribute in knowledge_graph.get("known_attributes", []):
             if "name" in attribute and "value" in attribute:
                 knowledge.append(
-                    f'{knowledge_graph["title"]} {attribute["name"]} {attribute["value"]}'
+                    (
+                        f'{knowledge_graph["title"]} {attribute["name"]}',
+                        f'{knowledge_graph["title"]} {attribute["name"]} {attribute["value"]}',
+                    )
                 )
         return knowledge
 
     def parse_related_questions(self, related_questions):
         return [
-            related_question["answer"]
+            (related_question["question"], related_question["answer"])
             for related_question in related_questions
             if "answer" in related_question
         ]
@@ -79,13 +84,12 @@ class ScaleSerpSearcher:
                     parsed = match.group(1)
                 else:
                     parsed = organic_result["snippet"]
-                # if "title" in organic_result:
-                #     parsed = (
-                #         organic_result["title"][: organic_result["title"].find(" - ")]
-                #         + " | "
-                #         + parsed
-                #     )
-                result.append(parsed)
+                if "title" in organic_result:
+                    key = organic_result["title"][: organic_result["title"].find(" - ")]
+                    key = key[: key.find(" | ")]
+                else:
+                    key = parsed
+                result.append((key, parsed))
         return result
 
     def generator(self, idx):

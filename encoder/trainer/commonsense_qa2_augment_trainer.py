@@ -1,4 +1,5 @@
 import os
+import re
 import json
 import logging
 import itertools
@@ -305,10 +306,20 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
 
         searcher = ScaleSerpSearcher("commonsense_qa2", queries)
         search_result = [
-            [knowledge.strip(".").replace('"', " ").lower() for knowledge in sr]
+            [
+                (
+                    key,
+                    re.sub(r"[<>()]", "", knowledge)
+                    .replace('"', " ")
+                    .strip(".")
+                    .strip(" ")
+                    .lower(),
+                )
+                for key, knowledge in sr
+            ]
             for sr in searcher.search_result
         ]
-        external_knowledge = [knowledge for sr in search_result for knowledge in sr]
+        external_knowledge = [knowledge for sr in search_result for _, knowledge in sr]
         matcher = dataset.matcher
         matcher.add_external_knowledge(external_knowledge)
 
@@ -316,41 +327,48 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
 
         contexts = {}
         id_to_searches = {}
-        id_to_facts = {}
+        id_to_knowledge_keys = {}
+        knowledge_key_to_knowledge = {}
 
         for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
             id_ = data["id"]
             hints = prompter.get_search_hints_of_id(id_)[0]
             id_to_searches[id_] = [" ".join(search) for search in hints["search"]]
 
-        for id_, facts in tqdm(zip(query_ids, search_result), total=len(query_ids)):
-            if id_ not in id_to_facts:
-                id_to_facts[id_] = []
-            id_to_facts[id_] += facts
+        for id_, sr in tqdm(zip(query_ids, search_result), total=len(query_ids)):
+            if id_ not in id_to_knowledge_keys:
+                id_to_knowledge_keys[id_] = []
+            id_to_knowledge_keys[id_] += [key for key, _ in sr]
+            for key, knowledge in sr:
+                knowledge_key_to_knowledge[key] = knowledge
 
         logging.info("Computing embeddings")
         search_embeddings = self.embed_dict(id_to_searches, embedder)
-        facts_embeddings = self.embed_dict(id_to_facts, embedder)
+        knowledge_keys_embeddings = self.embed_dict(id_to_knowledge_keys, embedder)
 
         logging.info("Finding best paths")
         for id_ in tqdm(id_to_searches):
             contexts[id_] = []
-            if id_ not in search_embeddings or id_ not in facts_embeddings:
+            if id_ not in search_embeddings or id_ not in knowledge_keys_embeddings:
                 continue
             hints = prompter.get_search_hints_of_id(id_)[0]
             best_fact_indices = t.argmax(
-                t.mm(search_embeddings[id_], facts_embeddings[id_].transpose(0, 1)),
+                t.mm(
+                    search_embeddings[id_],
+                    knowledge_keys_embeddings[id_].transpose(0, 1),
+                ),
                 dim=1,
             )
             for starts, search, best_fact_idx in zip(
                 hints["starts"], hints["search"], best_fact_indices
             ):
-                best_fact = id_to_facts[id_][best_fact_idx]
+                best_knowledge_key = id_to_knowledge_keys[id_][best_fact_idx]
+                best_knowledge = knowledge_key_to_knowledge[best_knowledge_key]
 
                 _, raw_path_edges, *__ = matcher.find_shortest_path(
                     source_sentence=", ".join(starts),
                     target_sentence=", ".join(search),
-                    intermediate_nodes=[best_fact],
+                    intermediate_nodes=[best_knowledge],
                     max_depth_for_each_node=2,
                 )
                 raw_paths = dataset.matcher.sub_paths_to_annotations(
