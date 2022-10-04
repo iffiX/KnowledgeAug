@@ -87,7 +87,7 @@ class ScaleSerpSearcher:
 
             if "snippet" in organic_result:
                 if re.search(
-                    "(ebay|amazon|etsy|walmart|buy|product|proddetail|shop|youtube|calculator)",
+                    "(ebay|amazon|etsy|walmart|homedepot|buy|product|proddetail|shop|youtube|calculator)",
                     organic_result["link"],
                 ):
                     continue
@@ -109,6 +109,7 @@ class ScaleSerpSearcher:
 
                 if (
                     parsed.count(" ") < 2
+                    or parsed.count("...") > 1
                     or parsed.startswith("Youtube")
                     or (
                         re.match("^(What|Which|Where|When|Why|Who|Whose|How) ", parsed)

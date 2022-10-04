@@ -104,18 +104,22 @@ class AugmentGenerator:
         self.top_facts_indices = {}
         for id_ in self.id_to_searches:
             if id_ in search_embeddings and id_ in knowledge_keys_embeddings:
-                self.top_facts_indices[id_] = (
-                    t.topk(
-                        t.mm(
-                            search_embeddings[id_],
-                            knowledge_keys_embeddings[id_].transpose(0, 1),
-                        ),
-                        k=min(3, knowledge_keys_embeddings[id_].shape[0]),
-                        dim=1,
-                    )
-                    .indices.cpu()
-                    .tolist()
+                topk = t.topk(
+                    t.mm(
+                        search_embeddings[id_],
+                        knowledge_keys_embeddings[id_].transpose(0, 1),
+                    ),
+                    k=min(3, knowledge_keys_embeddings[id_].shape[0]),
+                    dim=1,
                 )
+                all_indices = []
+                for indices, values in zip(topk.indices, topk.values):
+                    sub_indices = []
+                    for index, value in zip(indices, values):
+                        if value > 0.5:
+                            sub_indices.append(int(index))
+                    all_indices.append(sub_indices)
+                self.top_facts_indices[id_] = all_indices
 
         logging.info("Finding best paths")
 
