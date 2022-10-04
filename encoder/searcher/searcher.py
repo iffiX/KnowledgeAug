@@ -56,7 +56,13 @@ class ScaleSerpSearcher:
             else []
         )
         for attribute in knowledge_graph.get("known_attributes", []):
-            if "name" in attribute and "value" in attribute:
+            if (
+                "name" in attribute
+                and "value" in attribute
+                and not attribute["name"].startswith("View")
+                and not attribute["value"].startswith("http")
+                and not attribute["value"].endswith(".com")
+            ):
                 knowledge.append(
                     (
                         f'{knowledge_graph["title"]} {attribute["name"]}',
@@ -70,25 +76,68 @@ class ScaleSerpSearcher:
             (related_question["question"], related_question["answer"])
             for related_question in related_questions
             if "answer" in related_question
+            and related_question["answer"].count(" ") >= 2
         ]
 
     def parse_organic_results(self, organic_results):
+        raw_result = []
         result = []
+        key_count = {}
         for organic_result in organic_results:
 
             if "snippet" in organic_result:
+                if re.search(
+                    "(ebay|amazon|etsy|walmart|buy|product|proddetail|shop|youtube|calculator)",
+                    organic_result["link"],
+                ):
+                    continue
+                # Remove date of search
                 match = re.match(
-                    "^[a-zA-Z]+ [0-9]+, [0-9]+ — (.*)", organic_result["snippet"]
+                    "^[a-zA-Z]+ [0-9]+, [0-9]+(.*)", organic_result["snippet"]
                 )
                 if match is not None:
                     parsed = match.group(1)
                 else:
                     parsed = organic_result["snippet"]
+                if " \u2014 " in parsed:
+                    parsed = parsed[parsed.find(" \u2014 ") + len(" \u2014 ") :]
+
+                # Some snippets contain another date, remove it
+                match = re.match("^[a-zA-Z]+ [0-9]+, [0-9]+(.*)", parsed)
+                if match is not None:
+                    parsed = match.group(1)
+
+                if (
+                    parsed.count(" ") < 2
+                    or parsed.startswith("Youtube")
+                    or (
+                        re.match("^(What|Which|Where|When|Why|Who|Whose|How) ", parsed)
+                        and parsed.endswith("?")
+                    )
+                ):
+                    continue
+
                 if "title" in organic_result:
-                    key = organic_result["title"][: organic_result["title"].find(" - ")]
-                    key = key[: key.find(" | ")]
+                    key = organic_result["title"]
+                    end = organic_result["title"].find(" - ")
+                    key = key[: end if end != -1 else None]
+                    end = organic_result["title"].find(" | ")
+                    key = key[: end if end != -1 else None]
                 else:
                     key = parsed
+
+                if key == "Untitled":
+                    key = parsed
+
+                raw_result.append((key, parsed))
+                if key.lower() not in key_count:
+                    key_count[key.lower()] = 0
+                key_count[key.lower()] += 1
+
+        for key, parsed in raw_result:
+            if key_count[key.lower()] > 1:
+                result.append((parsed, parsed))
+            else:
                 result.append((key, parsed))
         return result
 

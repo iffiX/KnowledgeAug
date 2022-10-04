@@ -8,6 +8,7 @@ import torch as t
 import pytorch_lightning as pl
 from itertools import chain
 from tqdm import tqdm
+from multiprocessing import get_context
 from torch.utils.data import DataLoader
 from torch.distributed import all_gather_object, get_world_size, get_rank
 from transformers import T5ForConditionalGeneration, AutoTokenizer, BatchEncoding
@@ -35,6 +36,164 @@ from .utils import (
     set_worker_sharing_strategy,
     make_scheduler,
 )
+
+
+class AugmentGenerator:
+    instance = None
+
+    def __init__(self):
+        AugmentGenerator.instance = self
+        self.dataset = CommonsenseQA2BaseDataset(tokenizer=None)
+        self.prompter = CommonsenseQA2Prompter(self.dataset)
+        queries = []
+        query_ids = []
+        for data in chain(
+            self.dataset.original_train_data,
+            self.dataset.validate_data,
+            self.dataset.test_data,
+        ):
+            id_ = data["id"]
+            hints = self.prompter.get_search_hints_of_id(id_)[0]
+            if len(hints["search"]) > 1:
+                for search in hints["search"]:
+                    queries.append(" ".join(search))
+                    query_ids.append(id_)
+            else:
+                queries.append(data["text_question"])
+                query_ids.append(id_)
+
+        searcher = ScaleSerpSearcher("commonsense_qa2", queries)
+        search_result = [
+            [(key, knowledge.lower()) for key, knowledge in sr]
+            for sr in searcher.search_result
+        ]
+        self.lowered_knowledge_to_knowledge = {
+            knowledge.lower(): knowledge
+            for sr in searcher.search_result
+            for _, knowledge in sr
+        }
+        external_knowledge = [knowledge for sr in search_result for _, knowledge in sr]
+        self.dataset.matcher.add_external_knowledge(external_knowledge)
+
+        embedder = Embedder()
+
+        self.contexts = {}
+        self.id_to_searches = {}
+        self.id_to_knowledge_keys = {}
+        self.knowledge_key_to_knowledge = {}
+
+        for data in chain(
+            self.dataset.original_train_data,
+            self.dataset.validate_data,
+            self.dataset.test_data,
+        ):
+            id_ = data["id"]
+            hints = self.prompter.get_search_hints_of_id(id_)[0]
+            self.id_to_searches[id_] = [" ".join(search) for search in hints["search"]]
+
+        for id_, sr in tqdm(zip(query_ids, search_result), total=len(query_ids)):
+            if id_ not in self.id_to_knowledge_keys:
+                self.id_to_knowledge_keys[id_] = []
+            self.id_to_knowledge_keys[id_] += [key for key, _ in sr]
+            for key, knowledge in sr:
+                self.knowledge_key_to_knowledge[key] = knowledge
+
+        logging.info("Computing embeddings")
+        search_embeddings = self.embed_dict(self.id_to_searches, embedder)
+        knowledge_keys_embeddings = self.embed_dict(self.id_to_knowledge_keys, embedder)
+        self.top_facts_indices = {}
+        for id_ in self.id_to_searches:
+            if id_ in search_embeddings and id_ in knowledge_keys_embeddings:
+                self.top_facts_indices[id_] = (
+                    t.topk(
+                        t.mm(
+                            search_embeddings[id_],
+                            knowledge_keys_embeddings[id_].transpose(0, 1),
+                        ),
+                        k=min(3, knowledge_keys_embeddings[id_].shape[0]),
+                        dim=1,
+                    )
+                    .indices.cpu()
+                    .tolist()
+                )
+
+        logging.info("Finding best paths")
+
+        ctx = get_context("fork")
+        with ctx.Pool() as pool:
+            for id_, result in tqdm(
+                pool.imap_unordered(self.generate_paths, self.id_to_searches.keys()),
+                total=len(self.id_to_searches),
+            ):
+                self.contexts[id_] = result
+
+        empty_count = 0
+        for data in chain(
+            self.dataset.original_train_data,
+            self.dataset.validate_data,
+            self.dataset.test_data,
+        ):
+            if not self.contexts[data["id"]]:
+                empty_count += 1
+        total = (
+            len(self.dataset.original_train_data)
+            + len(self.dataset.validate_data)
+            + len(self.dataset.test_data)
+        )
+        logging.info(
+            f"{empty_count} contexts are empty, percent {empty_count * 100 / total:.2f} %"
+        )
+
+    @staticmethod
+    def generate_paths(id_):
+        self = AugmentGenerator.instance
+        result = []
+        if id_ not in self.top_facts_indices:
+            return id_, result
+        hints = self.prompter.get_search_hints_of_id(id_)[0]
+        for starts, search, top in zip(
+            hints["starts"], hints["search"], self.top_facts_indices[id_]
+        ):
+            for idx in top:
+                best_knowledge_key = self.id_to_knowledge_keys[id_][idx]
+                best_knowledge = self.knowledge_key_to_knowledge[best_knowledge_key]
+
+                _, raw_path_edges, *__ = self.dataset.matcher.find_shortest_path(
+                    source_sentence=", ".join(starts),
+                    target_sentence=", ".join(search),
+                    intermediate_nodes=[best_knowledge],
+                    max_depth_for_each_node=2,
+                )
+                raw_paths = self.dataset.matcher.sub_paths_to_annotations(
+                    raw_path_edges,
+                    templates="standard",
+                    prioritize_original_annotation=False,
+                )
+                # only the first level (corresponds to sample config)
+                path = ", ".join([xx for x in raw_paths for xx in x]).replace(
+                    best_knowledge, self.lowered_knowledge_to_knowledge[best_knowledge]
+                )
+                if len(path) == 0:
+                    continue
+                result.append(path + " # ")
+        return id_, result
+
+    def embed_dict(self, dict, embedder):
+        all_strings = []
+        all_ids = []
+        for id_, strings in dict.items():
+            all_strings += strings
+            all_ids += [id_] * len(strings)
+
+        embeddings = embedder.embed(all_strings)
+        result = {}
+        for embed, id_ in zip(embeddings, all_ids):
+            if id_ not in result:
+                result[id_] = []
+            result[id_].append(embed)
+        for id_ in result:
+            result[id_] = t.stack(result[id_])
+        return result
 
 
 class CommonsenseQA2AugmentTrainer(pl.LightningModule):
@@ -289,125 +448,4 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
         )
 
     def load_augment_contexts(self):
-        dataset = CommonsenseQA2BaseDataset(tokenizer=None)
-        prompter = CommonsenseQA2Prompter(dataset)
-        queries = []
-        query_ids = []
-        for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
-            id_ = data["id"]
-            hints = prompter.get_search_hints_of_id(id_)[0]
-            if len(hints["search"]) > 1:
-                for search in hints["search"]:
-                    queries.append(" ".join(search))
-                    query_ids.append(id_)
-            else:
-                queries.append(data["text_question"])
-                query_ids.append(id_)
-
-        searcher = ScaleSerpSearcher("commonsense_qa2", queries)
-        search_result = [
-            [
-                (
-                    key,
-                    re.sub(r"[<>()]", "", knowledge)
-                    .replace('"', " ")
-                    .strip(".")
-                    .strip(" ")
-                    .lower(),
-                )
-                for key, knowledge in sr
-            ]
-            for sr in searcher.search_result
-        ]
-        external_knowledge = [knowledge for sr in search_result for _, knowledge in sr]
-        matcher = dataset.matcher
-        matcher.add_external_knowledge(external_knowledge)
-
-        embedder = Embedder()
-
-        contexts = {}
-        id_to_searches = {}
-        id_to_knowledge_keys = {}
-        knowledge_key_to_knowledge = {}
-
-        for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
-            id_ = data["id"]
-            hints = prompter.get_search_hints_of_id(id_)[0]
-            id_to_searches[id_] = [" ".join(search) for search in hints["search"]]
-
-        for id_, sr in tqdm(zip(query_ids, search_result), total=len(query_ids)):
-            if id_ not in id_to_knowledge_keys:
-                id_to_knowledge_keys[id_] = []
-            id_to_knowledge_keys[id_] += [key for key, _ in sr]
-            for key, knowledge in sr:
-                knowledge_key_to_knowledge[key] = knowledge
-
-        logging.info("Computing embeddings")
-        search_embeddings = self.embed_dict(id_to_searches, embedder)
-        knowledge_keys_embeddings = self.embed_dict(id_to_knowledge_keys, embedder)
-
-        logging.info("Finding best paths")
-        for id_ in tqdm(id_to_searches):
-            contexts[id_] = []
-            if id_ not in search_embeddings or id_ not in knowledge_keys_embeddings:
-                continue
-            hints = prompter.get_search_hints_of_id(id_)[0]
-            best_fact_indices = t.argmax(
-                t.mm(
-                    search_embeddings[id_],
-                    knowledge_keys_embeddings[id_].transpose(0, 1),
-                ),
-                dim=1,
-            )
-            for starts, search, best_fact_idx in zip(
-                hints["starts"], hints["search"], best_fact_indices
-            ):
-                best_knowledge_key = id_to_knowledge_keys[id_][best_fact_idx]
-                best_knowledge = knowledge_key_to_knowledge[best_knowledge_key]
-
-                _, raw_path_edges, *__ = matcher.find_shortest_path(
-                    source_sentence=", ".join(starts),
-                    target_sentence=", ".join(search),
-                    intermediate_nodes=[best_knowledge],
-                    max_depth_for_each_node=2,
-                )
-                raw_paths = dataset.matcher.sub_paths_to_annotations(
-                    raw_path_edges,
-                    templates="standard",
-                    prioritize_original_annotation=True,
-                )
-                # only the first level (corresponds to sample config)
-                contexts[id_] += [
-                    ", ".join([xx for x in raw_paths for xx in x]) + " # "
-                ]
-
-        empty_count = 0
-        for data in chain(dataset.train_data, dataset.validate_data, dataset.test_data):
-            if not contexts[data["id"]]:
-                empty_count += 1
-        total = (
-            len(dataset.train_data)
-            + len(dataset.validate_data)
-            + len(dataset.test_data)
-        )
-        logging.info(
-            f"{empty_count} contexts are empty, percent {empty_count * 100 / total:.2f} %"
-        )
-        return contexts
-
-    def embed_dict(self, dict, embedder):
-        all_strings = []
-        all_ids = []
-        for id_, strings in dict.items():
-            all_strings += strings
-            all_ids += [id_] * len(strings)
-
-        embeddings = embedder.embed(all_strings)
-        result = {}
-        for embed, id_ in zip(embeddings, all_ids):
-            if id_ not in result:
-                result[id_] = []
-            result[id_].append(embed)
-        for id_ in result:
-            result[id_] = t.stack(result[id_])
-        return result
+        return AugmentGenerator().contexts

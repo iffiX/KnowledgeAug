@@ -34,7 +34,10 @@ class CommonsenseQA2BaseDataset:
             os.path.join(preprocess_cache_dir, "commonsense_qa2.data"),
             self.generate_data,
         ) as cache:
-            self.train_data = cache.data["train"]
+            self.original_train_data = cache.data["train"]
+            self.train_data = cache.data[
+                "train"
+            ]  # [d for d in cache.data["train"] if d["confidence"] >= 0.5]
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
 
@@ -219,13 +222,14 @@ class CommonsenseQA2BaseDataset:
                     "text_choices": text_choices,
                     "choices": choices,
                     "id": entry["id"],
+                    "confidence": entry["confidence"],
                 }
                 if "answer" in entry:
                     # For BERT, ALBERT, ROBERTA, use label instead, which is an integer
                     label = [
                         i for i, ch in enumerate(choices) if ch == entry["answer"]
                     ][0]
-
+                    preprocessed["validations"] = entry["validations"]
                     preprocessed["label"] = label
                     preprocessed["text_answer"] = choices[label]
 
