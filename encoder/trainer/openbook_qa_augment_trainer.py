@@ -281,7 +281,9 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
 
     @rank_zero_only
     def test_on_main_process(self, outputs):
-        _, result = collate_and_filter_outputs(outputs)
+        _, result = collate_and_filter_outputs(
+            outputs, [d["id"] for d in self.dataset.test_data]
+        )
         if "t5-" in self.config.base_type:
             self.dataset.generate_test_result_tokens(result, self.stage_result_path)
         else:

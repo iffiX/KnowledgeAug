@@ -161,7 +161,7 @@ class QASCBaseDataset:
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1).tolist()
         with open_file_with_create_directories(
-            os.path.join(directory, "qasc.jsonl"), "w"
+            os.path.join(directory, "qasc.csv"), "w"
         ) as file:
             if len(labels) != len(self.test_data):
                 raise ValueError(
@@ -170,16 +170,12 @@ class QASCBaseDataset:
                 )
             answer_keys = ["A", "B", "C", "D", "E", "F", "G", "H"]
             for label, preprocessed in zip(labels, self.test_data):
-                file.write(
-                    json.dumps(
-                        {"id": preprocessed["id"], "answerKey": answer_keys[label]}
-                    )
-                )
+                file.write(f'"{preprocessed["id"]}","{answer_keys[label]}"\n')
 
     def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
-            os.path.join(directory, "qasc.jsonl"), "w"
+            os.path.join(directory, "qasc.csv"), "w"
         ) as file:
             if tokens.shape[0] != len(self.test_data):
                 raise ValueError(
@@ -191,11 +187,7 @@ class QASCBaseDataset:
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
                     if answer == choice:
-                        file.write(
-                            json.dumps(
-                                {"id": preprocessed["id"], "answerKey": answer_keys[i]}
-                            )
-                        )
+                        file.write(f'"{preprocessed["id"]}","{answer_keys[label]}"\n')
                         break
                 else:
                     missing += 1
@@ -203,7 +195,7 @@ class QASCBaseDataset:
                         f"Missing answer, choices: {preprocessed['choices']}, "
                         f"answer: {answer}, using default A as answer."
                     )
-                    file.write(json.dumps({"id": preprocessed["id"], "answerKey": "A"}))
+                    file.write(f'"{preprocessed["id"]}","A"\n')
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
     def set_corpus(self):

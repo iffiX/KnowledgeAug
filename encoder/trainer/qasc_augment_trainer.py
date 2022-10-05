@@ -245,7 +245,9 @@ class QASCAugmentTrainer(pl.LightningModule):
 
     @rank_zero_only
     def test_on_main_process(self, outputs):
-        _, result = collate_and_filter_outputs(outputs)
+        _, result = collate_and_filter_outputs(
+            outputs, [d["id"] for d in self.dataset.test_data]
+        )
         if "t5-" in self.config.base_type:
             self.dataset.generate_test_result_tokens(result, self.stage_result_path)
         else:
@@ -300,18 +302,18 @@ class QASCAugmentTrainer(pl.LightningModule):
             raw_contexts = json.load(file)
             contexts = {}
             for id, (raw_paths, raw_path_edges) in raw_contexts.items():
-                if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                    raw_paths = [
-                        flatten_sublists(
-                            dataset.matcher.sub_paths_to_annotations(
-                                x[:2],
-                                decoded_sub_paths=y[:2],
-                                templates="standard",
-                                prioritize_original_annotation=True,
-                            )
-                        )
-                        for x, y in zip(raw_path_edges, raw_paths)
-                    ]
+                # if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
+                #     raw_paths = [
+                #         flatten_sublists(
+                #             dataset.matcher.sub_paths_to_annotations(
+                #                 x[:2],
+                #                 decoded_sub_paths=y[:2],
+                #                 templates="standard",
+                #                 prioritize_original_annotation=True,
+                #             )
+                #         )
+                #         for x, y in zip(raw_path_edges, raw_paths)
+                #     ]
 
                 paths = [", ".join(path) + " # " for path in raw_paths][:4]
                 contexts[id] = list(dict.fromkeys(paths))
