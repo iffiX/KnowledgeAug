@@ -115,20 +115,20 @@ class FactSelector:
 
         self.stop_processes()
         query_rank_of_facts = [
-            query_rank_of_facts[0].to("cpu"),
-            query_rank_of_facts[1].to("cpu"),
+            query_rank_of_facts[0].to("cpu").tolist(),  # indices
+            query_rank_of_facts[1].to("cpu").tolist(),  # values
         ]
         self.selected_facts = [
             [self.facts[r] for r in qr if r != -1] for qr in query_rank_of_facts[0]
         ]
-        # self.selected_facts_rank = [
-        #     [
-        #         (int(query_rank_of_facts[0][i][j]), float(query_rank_of_facts[1][i][j]))
-        #         for j in range(self.max_facts)
-        #         if query_rank_of_facts[0][i][j] != -1
-        #     ]
-        #     for i in range(len(self.queries))
-        # ]
+        self.selected_facts_rank = [
+            [
+                (query_rank_of_facts[0][i][j], query_rank_of_facts[1][i][j])
+                for j in range(self.max_facts)
+                if query_rank_of_facts[0][i][j] != -1
+            ]
+            for i in range(len(self.queries))
+        ]
 
     def update_rank(self, batch_start, query_rank_of_facts, score):
         # First select top_max_facts number of facts for each query

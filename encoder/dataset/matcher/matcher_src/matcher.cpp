@@ -149,11 +149,11 @@ vector<vector<int>> Trie::matchForStart(const vector<int> &sentence, size_t star
         } else
             break;
     }
-#ifdef DEBUG
-    cout << "Matched results:" << endl;
-    for (auto &r : result)
-        cout << fmt::format("[{}]", fmt::join(r.begin(), r.end(), ",")) << endl;
-#endif
+//#ifdef DEBUG
+//    cout << "Matched results:" << endl;
+//    for (auto &r : result)
+//        cout << fmt::format("[{}]", fmt::join(r.begin(), r.end(), ",")) << endl;
+//#endif
     if (not allowSubMatch and not result.empty())
         result.erase(result.begin(), result.begin() + result.size() - 1);
     return move(result);
@@ -389,9 +389,9 @@ long KnowledgeBase::addCompositeNode(const string &compositeNode,
         size_t inSize = hasIn ? edgeToTarget.at(subNodeId).size() : 0;
 
         if (outSize + inSize < splitNodeMinimumEdgeNum) {
-#ifdef DEBUG
-            cout << fmt::format("Splitting node [{}:{}]", nodes[subNodeId], subNodeId) << endl;
-#endif
+//#ifdef DEBUG
+//            cout << fmt::format("Splitting node [{}:{}]", nodes[subNodeId], subNodeId) << endl;
+//#endif
             unordered_map<size_t, vector<vector<int>>> subSubMatches = nodeTrie.matchForAll(
                     subNode.second.back(), true);
 
@@ -412,11 +412,11 @@ long KnowledgeBase::addCompositeNode(const string &compositeNode,
                                 compositeComponentCount[baseNodeId] += 1;
                             }
 
-#ifdef DEBUG
-                            cout << fmt::format("Adding component [{}:{}] to composite node [{}:{}]",
-                                                nodes[baseNodeId], baseNodeId,
-                                                nodes[newNodeId], newNodeId) << endl;
-#endif
+//#ifdef DEBUG
+//                            cout << fmt::format("Adding component [{}:{}] to composite node [{}:{}]",
+//                                                nodes[baseNodeId], baseNodeId,
+//                                                nodes[newNodeId], newNodeId) << endl;
+//#endif
                         }
                     }
                 }
@@ -431,11 +431,11 @@ long KnowledgeBase::addCompositeNode(const string &compositeNode,
                 compositeComponentCount[subNodeId] += 1;
             }
 
-#ifdef DEBUG
-            cout << fmt::format("Adding component [{}:{}] to composite node [{}:{}]",
-                                nodes[subNodeId], subNodeId,
-                                nodes[newNodeId], newNodeId) << endl;
-#endif
+//#ifdef DEBUG
+//            cout << fmt::format("Adding component [{}:{}] to composite node [{}:{}]",
+//                                nodes[subNodeId], subNodeId,
+//                                nodes[newNodeId], newNodeId) << endl;
+//#endif
         }
     }
     compositeNodes.emplace(newNodeId, components);
@@ -456,12 +456,12 @@ size_t KnowledgeBase::addCompositeEdge(long sourceNodeId, long relationId, long 
     adjacency[compositeNodeId].insert(sourceNodeId);
     adjacency[sourceNodeId].insert(compositeNodeId);
     tokenizedEdgeAnnotations.emplace_back(vector<int>{});
-#ifdef DEBUG
-    cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
-                        nodes[sourceNodeId], sourceNodeId,
-                        nodes[compositeNodeId], compositeNodeId,
-                        relationships[relationId], relationId) << endl;
-#endif
+//#ifdef DEBUG
+//    cout << fmt::format("Connecting node [{}:{}] to composite node [{}:{}] with relation [{}:{}]",
+//                        nodes[sourceNodeId], sourceNodeId,
+//                        nodes[compositeNodeId], compositeNodeId,
+//                        relationships[relationId], relationId) << endl;
+//#endif
     return edgeIndex;
 }
 
@@ -793,6 +793,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                                    const vector<string> &intermediateNodes,
                                    const vector<int> &sourceMask,
                                    const vector<int> &targetMask,
+                                   bool findTarget,
                                    int maxDepthForEachNode,
                                    size_t splitNodeMinimumEdgeNum,
                                    float splitNodeMinimumSimilarity) const {
@@ -831,18 +832,18 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #endif
         return move(PathResult());
     }
-    if (targetMatch.empty()) {
+    if (targetMatch.empty() and findTarget) {
 #ifdef DEBUG
         cout << "Target match result is empty, return" << endl;
 #endif
         return move(PathResult());
     }
 
+    PathResult result;
+
     // node ids in sourceSentence / targetSentence, their occurence times
     unordered_map<long, float> sourceNodeOccurrences;
     unordered_map<long, float> targetNodeOccurrences;
-
-    PathResult result;
 
     for (auto &sm : sourceMatch)
         sourceNodeOccurrences[kb.nodeMap.at(sm.second)] += 1;
@@ -850,16 +851,10 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     for (auto &tm : targetMatch)
         targetNodeOccurrences[kb.nodeMap.at(tm.second)] += 1;
 
-    float compositeNodesCountSum = 0;
-    float corpusNodesCountSum = 0;
-    for (auto &count : documentCountOfNodeInCorpus)
-        corpusNodesCountSum += count.second;
-    for (auto &count : kb.compositeComponentCount)
-        compositeNodesCountSum += count.second;
-
     // Construct search targets for each step
     vector<unordered_set<long>> searchIds;
     vector<long> sourceNodes, targetNodes;
+
     for (auto &sOccur : sourceNodeOccurrences)
         sourceNodes.push_back(sOccur.first);
     for (auto &tOccur : targetNodeOccurrences)
@@ -868,7 +863,8 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     searchIds.emplace_back(unordered_set<long>(sourceNodes.begin(), sourceNodes.end()));
     for (auto &interNode : intermediateNodes)
         searchIds.emplace_back(unordered_set<long>{kb.findNodes({interNode})[0]});
-    searchIds.emplace_back(unordered_set<long>(targetNodes.begin(), targetNodes.end()));
+    if (findTarget)
+        searchIds.emplace_back(unordered_set<long>(targetNodes.begin(), targetNodes.end()));
 
 #ifdef DEBUG_DECISION
     cout << endl << "SearchIds:" << endl;
@@ -881,7 +877,6 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #endif
 
     vector<vector<Edge>> bestPath;
-    // Exclude target nodes from searching for now
     for (size_t level = 0; level < searchIds.size() - 1; level++)
     {
         vector<pair<vector<Edge>, float>> paths;
@@ -1167,7 +1162,7 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         allowedCompositeNodesIndex[allowedCompositeNode] = true;
 
 #pragma omp parallel for num_threads(4) default(none) private(similarityCache) \
-    shared(visitedNodes, startNodes, targetNodes, allowedCompositeNodes, \
+    shared(cout, visitedNodes, startNodes, targetNodes, allowedCompositeNodes, \
            maxDepth, findTarget, findComposite, filterCompositeNodesByFBeta, minimumFBeta,\
            targetNodesSet, allowedCompositeNodesIndex, context, result) \
     if (parallel)
@@ -1316,9 +1311,9 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
         cout << kb.nodes[node] << ", ";
     cout << "]" << endl;
     cout << fmt::format("Paths:") << endl;
-    for (size_t i = 0; i < get<2>(result).size(); i++) {
+    for (size_t i = 0; i < get<1>(result).size(); i++) {
         cout << fmt::format("Path {}: ", i);
-        for (auto &edge : get<2>(result)[i])
+        for (auto &edge : get<1>(result)[i])
             cout << edgeToStringAnnotation(edge) << ", ";
         cout << endl;
     }
@@ -1970,9 +1965,9 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
     size_t outSize = hasOut ? kb.edgeFromSource.at(nodeId).size() : 0;
     size_t inSize = hasIn ? kb.edgeToTarget.at(nodeId).size() : 0;
     if (outSize + inSize < splitNodeMinimumEdgeNum) {
-#ifdef DEBUG
-        cout << fmt::format("Splitting node [{}:{}]", kb.nodes[nodeId], nodeId) << endl;
-#endif
+//#ifdef DEBUG
+//        cout << fmt::format("Splitting node [{}:{}]", kb.nodes[nodeId], nodeId) << endl;
+//#endif
         unordered_map<size_t, vector<vector<int>>> subMatches = kb.nodeTrie.matchForAll(node, true);
 
         size_t currentOffset = 0;
@@ -1987,13 +1982,13 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                     long subNodeId = kb.nodeMap.at(subSubMatch);
                     if (kb.cosineSimilarity(subNodeId, nodeId) > splitNodeMinimumSimilarity) {
                         match.emplace(position + subMatch.first, subSubMatch);
-#ifdef DEBUG
-                        cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
-#endif
-                    } else {
-#ifdef DEBUG
-                        cout << fmt::format("Ignore splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
-#endif
+//#ifdef DEBUG
+//                        cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
+//#endif
+//                    } else {
+//#ifdef DEBUG
+//                        cout << fmt::format("Ignore splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
+//#endif
                     }
                 }
             }

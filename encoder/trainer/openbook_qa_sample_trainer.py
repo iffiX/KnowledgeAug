@@ -62,6 +62,7 @@ class OpenBookQASampleTrainer(pl.LightningModule):
                 f"openbook_qa_{split}",
                 [
                     (
+                        d["id"],
                         d["text_question"],
                         d["text_choices"],
                         d["text_answer"],

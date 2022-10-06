@@ -22,9 +22,8 @@ from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.qasc import QASCBaseDataset
 from encoder.dataset.sample import (
-    RewardPredictorDatasetCreatorWithFilter,
+    RewardPredictorDatasetCreatorWithLimitedNodes,
     RewardPredictorDataset,
-    RewardPredictorBestFirstBeamSearchDatasetWithFilter,
     RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes,
 )
 from encoder.utils.config import QASCSampleTrainConfig, fix_missing
@@ -57,54 +56,11 @@ class QASCSampleTrainer(pl.LightningModule):
         self.dataset.matcher.add_qasc_facts(train_and_validate=False)
         matcher.add_qasc_facts(train_and_validate=True)
 
-        # # Estimate filter bound
-        # filter_bound_sum = 0
-        # filter_bound_sum_l2 = 0
-        # filter_bound_num = 0
-        # filter_bound_num_l2 = 0
-        # filter_bound_range = [1, 0]
-        # filter_bound_range_l2 = [1, 0]
-        # for data in tqdm(self.dataset.train_data):
-        #     # first level
-        #     _, target_nodes = self.dataset.matcher.match_source_and_target_nodes(
-        #         "", data["text_question"]
-        #     )
-        #     nodes = self.dataset.matcher.matcher.kb.find_nodes(data["facts"])
-        #     filter_bound_num += 1
-        #     score = self.dataset.matcher.matcher.compute_f_beta_score(
-        #         nodes[0], target_nodes, beta=2
-        #     )
-        #     filter_bound_sum += score
-        #     filter_bound_range = [
-        #         min(filter_bound_range[0], score),
-        #         max(filter_bound_range[1], score),
-        #     ]
-        #
-        #     # next level
-        #     (_, target_nodes,) = self.dataset.matcher.match_source_and_target_nodes(
-        #         "", self.dataset.matcher.matcher.kb.nodes[nodes[0]].lower()
-        #     )
-        #     filter_bound_num_l2 += 1
-        #     score = self.dataset.matcher.matcher.compute_f_beta_score(
-        #         nodes[1], target_nodes, beta=2
-        #     )
-        #     filter_bound_sum_l2 += score
-        #     filter_bound_range_l2 = [
-        #         min(filter_bound_range_l2[0], score),
-        #         max(filter_bound_range_l2[1], score),
-        #     ]
-        #
-        # print(f"F-Beta:{filter_bound_sum / filter_bound_num}")
-        # print(f"F-Beta: min={filter_bound_range[0]}, max={filter_bound_range[1]}")
-        # print(f"F-Beta-l2:{filter_bound_sum_l2 / filter_bound_num_l2}")
-        # print(
-        #     f"F-Beta-l2: min={filter_bound_range_l2[0]}, max={filter_bound_range_l2[1]}"
-        # )
-
         self.train_reward_predictor_dataset = RewardPredictorDataset(
             "qasc_train",
             [
                 (
+                    d["id"],
                     d["text_question"],
                     d["text_choices"],
                     d["text_answer"],
@@ -113,7 +69,6 @@ class QASCSampleTrainer(pl.LightningModule):
                 for d in self.dataset.train_data
             ],
             matcher,
-            limit_neg_transition_num=4000,
             max_depth=self.config.max_depth,
             negative_samples=self.config.negative_samples,
             negative_shuffle_seed=self.config.negative_shuffle_seed
@@ -121,7 +76,7 @@ class QASCSampleTrainer(pl.LightningModule):
             else self.config.negative_shuffle_seed + get_rank(),
             state_delimiter=self.config.state_delimeter,
             end_of_reasoning=self.config.end_of_reasoning,
-            creator=RewardPredictorDatasetCreatorWithFilter,
+            creator=RewardPredictorDatasetCreatorWithLimitedNodes,
         )
         rand = random.Random(42)
         self.validate_indices = rand.choices(
@@ -342,12 +297,11 @@ class QASCSampleTrainer(pl.LightningModule):
                 [
                     (
                         d["id"],
-                        "Q: " + d["text_question"],
-                        "Choices: "
-                        + ", ".join([c.replace(",", "") for c in d["choices"]]),
+                        d["text_question"],
+                        ", ".join([c.replace(",", "") for c in d["choices"]]),
                     )
                     for d in getattr(self.dataset, f"{split}_data")
-                ],
+                ][:30],
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")

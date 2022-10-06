@@ -1,7 +1,7 @@
 {
     "configs": [
         {
-            "base_type": "microsoft/deberta-v3-large",
+            "base_type": "microsoft/deberta-v3-base",
             "batch_size": 1,
             "epochs": 20,
             "negative_samples": 15,

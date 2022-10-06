@@ -17,13 +17,13 @@ class RewardPredictorDatasetCreator:
 
     def __init__(
         self,
-        data: List[Tuple[str, str, str, List[str]]],
+        data: List[Tuple[str, str, str, str, List[str]]],
         matcher: BaseMatcher,
         max_depth: int = 2,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
     ):
-        self.data = data
+        self.data = data  # id, question, choices, correct choice, intermediate nodes
         self.matcher = matcher
         self.max_depth = max_depth
         self.state_delimiter = state_delimiter
@@ -34,15 +34,21 @@ class RewardPredictorDatasetCreator:
         try:
             self = RewardPredictorDatasetCreator.instance
             result = self.matcher.find_shortest_path(
-                source_sentence=self.data[data_idx][0],
-                target_sentence=self.data[data_idx][2],
-                intermediate_nodes=self.data[data_idx][3],
+                source_sentence=self.data[data_idx][1],
+                target_sentence=self.data[data_idx][3],
+                intermediate_nodes=self.data[data_idx][4],
                 max_depth_for_each_node=self.max_depth,
             )
             _, target_nodes = self.matcher.match_source_and_target_nodes(
-                self.data[data_idx][0], self.data[data_idx][2]
+                self.data[data_idx][1], self.data[data_idx][2]
             )
-            state = self.data[data_idx][0] + " " + self.data[data_idx][1] + " Explain: "
+            state = (
+                "Question: "
+                + self.data[data_idx][1]
+                + " Choices: "
+                + self.data[data_idx][2]
+                + " Explain: "
+            )
             transitions = []
 
             if len(result[0]) > 0:
@@ -59,7 +65,11 @@ class RewardPredictorDatasetCreator:
                         _,
                         list_of_neg_sub_path_edges,
                     ) = self.find_available_choices(
-                        self, visited_nodes, start_nodes, target_nodes,
+                        self,
+                        visited_nodes,
+                        start_nodes,
+                        target_nodes,
+                        self.data[data_idx][0],
                     )
 
                     # exclude the right sub path
@@ -97,7 +107,7 @@ class RewardPredictorDatasetCreator:
 
     @staticmethod
     def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes
+        self, visited_nodes, current_reached_nodes, target_nodes, _id
     ):
         return self.matcher.find_available_choices(
             visited_nodes,
@@ -117,7 +127,7 @@ class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
 
     @staticmethod
     def find_available_choices(
-        self, visited_nodes, current_reached_nodes, target_nodes
+        self, visited_nodes, current_reached_nodes, target_nodes, _id
     ):
         return self.matcher.find_available_choices(
             visited_nodes,
@@ -130,11 +140,32 @@ class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
         )
 
 
+class RewardPredictorDatasetCreatorWithLimitedNodes(RewardPredictorDatasetCreator):
+    @staticmethod
+    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+        RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreatorWithLimitedNodes(
+            data, matcher, max_depth, state_delimiter, end_of_reasoning
+        )
+
+    @staticmethod
+    def find_available_choices(
+        self, visited_nodes, current_reached_nodes, target_nodes, _id
+    ):
+        return self.matcher.find_available_choices(
+            visited_nodes,
+            current_reached_nodes,
+            target_nodes,
+            parallel=False,
+            max_depth=self.max_depth,
+            allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
+        )
+
+
 class RewardPredictorDataset(Dataset):
     def __init__(
         self,
         name: str,
-        data: List[Tuple[str, str, str, List[str]]],
+        data: List[Tuple[str, str, str, str, List[str]]],
         matcher: BaseMatcher,
         limit_size: int = None,
         limit_neg_transition_num: int = None,
@@ -379,7 +410,13 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
             target_nodes_set = set(target_nodes)
             visited_nodes = []
             current_reached_nodes = source_nodes
-            state = self.data[data_idx][1] + " " + self.data[data_idx][2] + " Explain: "
+            state = (
+                "Question: "
+                + self.data[data_idx][1]
+                + " Choices: "
+                + self.data[data_idx][2]
+                + " Explain: "
+            )
 
             # for profiling
             inferenced_action_num = 0

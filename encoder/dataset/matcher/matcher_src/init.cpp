@@ -121,6 +121,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("intermediate_nodes"),
                  py::arg("source_mask") = std::vector<int>{},
                  py::arg("target_mask") = std::vector<int>{},
+                 py::arg("find_target") = false,
                  py::arg("max_depth_for_each_node") = 3,
                  py::arg("split_node_minimum_edge_num") = 20,
                  py::arg("split_node_minimum_similarity") = 0.35)

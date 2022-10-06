@@ -268,6 +268,7 @@ public:
     PathResult findShortestPath(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence,
                                 const std::vector<std::string> &intermediateNodes,
                                 const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
+                                bool findTarget = false,
                                 int maxDepthForEachNode = 3,
                                 size_t splitNodeMinimumEdgeNum = 20,
                                 float splitNodeMinimumSimilarity = 0.35) const;

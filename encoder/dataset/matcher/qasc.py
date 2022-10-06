@@ -149,6 +149,7 @@ class QASCMatcher(BaseMatcher):
         ):
 
             questions = []
+            questions_with_choices = []
             question_ids = []
             for dataset_path in (
                 self.qasc.train_path,
@@ -160,6 +161,11 @@ class QASCMatcher(BaseMatcher):
                         entry = json.loads(line)
                         question_ids.append(entry["id"])
                         questions.append(entry["question"]["stem"])
+                        questions_with_choices.append(entry["question"]["stem"])
+                        for choice in entry["question"]["choices"]:
+                            questions_with_choices.append(
+                                entry["question"]["stem"] + " " + choice["text"]
+                            )
 
             def generate_first_level_facts():
                 with open(self.qasc.corpus_path, "r") as file:
@@ -196,15 +202,29 @@ class QASCMatcher(BaseMatcher):
 
             def generate_filtered_qasc_corpus_tokens():
                 fact_selector = FactSelector(
-                    questions, facts, min_score=0.4, max_facts=5000
+                    questions_with_choices,
+                    facts,
+                    min_score=0.4,
+                    max_facts=1000,
+                    inner_batch_size=4096,
                 )
+                # Select top 5000 facts for each question
+                selected_facts = []
+                for start in tqdm(list(range(0, len(questions_with_choices), 9))):
+                    facts_ranks = []
+                    for i in range(9):
+                        facts_ranks += fact_selector.selected_facts_rank[start + i]
+                    facts_ranks = sorted(facts_ranks, key=lambda x: x[1], reverse=True)[
+                        :5000
+                    ]
+                    selected_facts.append([facts[rank[0]] for rank in facts_ranks])
                 tokens = [
                     (fact, ids, mask)
                     for fact, (ids, mask) in zip(
-                        facts, self.parallel_tokenize_and_mask(facts)
+                        facts, self.parallel_tokenize_and_mask(facts),
                     )
                 ]
-                return question_ids, fact_selector.selected_facts, tokens
+                return question_ids, selected_facts, tokens
 
             with PickleCache(
                 os.path.join(preprocess_cache_dir, "qasc_matcher_filtered_corpus.data"),
