@@ -1,11 +1,12 @@
 import os
+import time
 import heapq
 import random
 import traceback
 import multiprocessing as mp
 import tqdm
 import torch as t
-from typing import List, Tuple, Set, Union, Any, Optional
+from typing import List, Tuple, Set, Union, Callable, Any, Optional
 from torch.utils.data import Dataset
 from .matcher.base import BaseMatcher
 from ..utils.settings import preprocess_cache_dir
@@ -17,45 +18,56 @@ class RewardPredictorDatasetCreator:
 
     def __init__(
         self,
-        data: List[Tuple[str, str, str, str, List[str]]],
+        data: List[Tuple[str, str, str, List[str], List[str]]],
         matcher: BaseMatcher,
         max_depth: int = 2,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        wrong_choice: str = "WRONG_CHOICE",
     ):
-        self.data = data  # id, question, choices, correct choice, intermediate nodes
+        self.data = (
+            data  # id, question, correct choice, all choices, intermediate nodes
+        )
         self.matcher = matcher
         self.max_depth = max_depth
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
+        self.wrong_choice = wrong_choice
 
     @staticmethod
     def get_transitions_for_sample(data_idx):
         try:
             self = RewardPredictorDatasetCreator.instance
+            source_sentence = (
+                self.data[data_idx][1]
+                if "Context:" not in self.data[data_idx][1]
+                else self.data[data_idx][1][: self.data[data_idx][1].find("Context:")]
+            )
             result = self.matcher.find_shortest_path(
-                source_sentence=self.data[data_idx][1],
-                target_sentence=self.data[data_idx][3],
+                source_sentence=source_sentence,
+                target_sentence=self.data[data_idx][2],
                 intermediate_nodes=self.data[data_idx][4],
+                find_target=True,
                 max_depth_for_each_node=self.max_depth,
             )
-            _, target_nodes = self.matcher.match_source_and_target_nodes(
-                self.data[data_idx][1], self.data[data_idx][2]
-            )
-            state = (
-                "Question: "
-                + self.data[data_idx][1]
-                + " Choices: "
-                + self.data[data_idx][2]
-                + " Explain: "
+            start_nodes, target_nodes = self.matcher.match_source_and_target_nodes(
+                source_sentence, self.data[data_idx][2]
             )
             transitions = []
-
+            # path for correct choice
             if len(result[0]) > 0:
+                state = (
+                    "Question: "
+                    + self.data[data_idx][1]
+                    + " Choice: "
+                    + self.data[data_idx][2]
+                    + " Explain: "
+                )
+
                 # Note, nodes have one more level than annotations and edges
                 # The last edge should be "end of reasoning", and all possible choices are excluded
                 visited_nodes = []
-                for sub_path_annotations, sub_path_edges, start_nodes in zip(
+                for sub_path_annotations, sub_path_edges, level_start_nodes in zip(
                     result[0] + [[self.end_of_reasoning]], result[1] + [[]], result[2],
                 ):
                     # collect paths that will be used as negative samples
@@ -67,7 +79,7 @@ class RewardPredictorDatasetCreator:
                     ) = self.find_available_choices(
                         self,
                         visited_nodes,
-                        start_nodes,
+                        level_start_nodes,
                         target_nodes,
                         self.data[data_idx][0],
                     )
@@ -86,13 +98,37 @@ class RewardPredictorDatasetCreator:
                     )
                     state = (
                         state
-                        + self.state_delimiter
                         + self.state_delimiter.join(sub_path_annotations)
+                        + self.state_delimiter
                     )
                     visited_nodes += [e[0] for e in sub_path_edges] + [
                         e[2] for e in sub_path_edges
                     ]
                     visited_nodes = list(set(visited_nodes))
+
+            # target nodes is just a placeholder here
+            (
+                list_of_neg_annotations_for_wrong_choices,
+                _,
+                _,
+                _,
+            ) = self.find_available_choices(
+                self, [], start_nodes, target_nodes, self.data[data_idx][0],
+            )
+            choice = random.Random(data_idx).choice(
+                [c for c in self.data[data_idx][3] if c != self.data[data_idx][2]]
+            )
+            state = (
+                "Question: "
+                + self.data[data_idx][1]
+                + " Choice: "
+                + choice
+                + " Explain: "
+            )
+
+            transitions.append(
+                (state, [self.wrong_choice], list_of_neg_annotations_for_wrong_choices,)
+            )
         except Exception as e:
             print(f"Error: {data_idx}")
             traceback.print_exc()
@@ -100,9 +136,11 @@ class RewardPredictorDatasetCreator:
         return data_idx, transitions
 
     @staticmethod
-    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+    def initialize_pool(
+        data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
+    ):
         RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreator(
-            data, matcher, max_depth, state_delimiter, end_of_reasoning
+            data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
         )
 
     @staticmethod
@@ -114,15 +152,18 @@ class RewardPredictorDatasetCreator:
             current_reached_nodes,
             target_nodes,
             parallel=False,
+            find_target=True,
             max_depth=self.max_depth,
         )
 
 
 class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
     @staticmethod
-    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+    def initialize_pool(
+        data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
+    ):
         RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreatorWithFilter(
-            data, matcher, max_depth, state_delimiter, end_of_reasoning
+            data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
         )
 
     @staticmethod
@@ -135,6 +176,7 @@ class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
             target_nodes,
             parallel=False,
             max_depth=self.max_depth,
+            find_target=True,
             filter_composite_nodes_by_f_beta=True,
             minimum_f_beta=0.35,
         )
@@ -142,9 +184,11 @@ class RewardPredictorDatasetCreatorWithFilter(RewardPredictorDatasetCreator):
 
 class RewardPredictorDatasetCreatorWithLimitedNodes(RewardPredictorDatasetCreator):
     @staticmethod
-    def initialize_pool(data, matcher, max_depth, state_delimiter, end_of_reasoning):
+    def initialize_pool(
+        data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
+    ):
         RewardPredictorDatasetCreator.instance = RewardPredictorDatasetCreatorWithLimitedNodes(
-            data, matcher, max_depth, state_delimiter, end_of_reasoning
+            data, matcher, max_depth, state_delimiter, end_of_reasoning, wrong_choice
         )
 
     @staticmethod
@@ -157,6 +201,7 @@ class RewardPredictorDatasetCreatorWithLimitedNodes(RewardPredictorDatasetCreato
             target_nodes,
             parallel=False,
             max_depth=self.max_depth,
+            find_target=True,
             allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
         )
 
@@ -165,7 +210,7 @@ class RewardPredictorDataset(Dataset):
     def __init__(
         self,
         name: str,
-        data: List[Tuple[str, str, str, str, List[str]]],
+        data: List[Tuple[str, str, str, List[str], List[str]]],
         matcher: BaseMatcher,
         limit_size: int = None,
         limit_neg_transition_num: int = None,
@@ -174,12 +219,13 @@ class RewardPredictorDataset(Dataset):
         negative_shuffle_seed: int = 42,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        wrong_choice: str = "WRONG_CHOICE",
         creator=None,
     ):
         """
         Args:
             name: Dataset name, used to differ cache from one another.
-            data: A list of tuples of question, choices, answer and facts.
+            data: A list of tuples of id, question, answer, choices and facts.
         """
         self.name = name
         self.data = data
@@ -191,51 +237,60 @@ class RewardPredictorDataset(Dataset):
         self.negative_samples = negative_samples
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
+        self.wrong_choice = wrong_choice
         self.creator = creator or RewardPredictorDatasetCreator
         self.pretrain_data = None
 
     def __len__(self):
         if self.pretrain_data is None:
             self.load()
-        return len(self.pretrain_data[0])
+        return len(self.pretrain_data)
 
     def __getitem__(self, idx):
         if self.pretrain_data is None:
             self.load()
         if self.negative_samples is not None:
             negative_samples = min(
-                self.negative_samples, len(self.pretrain_data[2][idx])
+                self.negative_samples, len(self.pretrain_data[idx][3])
             )
-            self.rand.shuffle(self.pretrain_data[2][idx])
+            self.rand.shuffle(self.pretrain_data[idx][3])
             # state, action, wrong actions
-            if self.pretrain_data[1][idx] == [self.end_of_reasoning]:
+            if self.pretrain_data[idx][2] == [
+                self.end_of_reasoning
+            ] or self.pretrain_data[idx][2] == [self.wrong_choice]:
                 return (
-                    self.pretrain_data[0][idx],
-                    self.state_delimiter.join(self.pretrain_data[1][idx]),
+                    self.pretrain_data[idx][0],
+                    self.pretrain_data[idx][1],
+                    self.state_delimiter.join(self.pretrain_data[idx][2]),
                     [
                         self.state_delimiter.join(x)
-                        for x in self.pretrain_data[2][idx][:negative_samples]
+                        for x in self.pretrain_data[idx][3][:negative_samples]
                     ],
                 )
             else:
                 return (
-                    self.pretrain_data[0][idx],
-                    self.state_delimiter.join(self.pretrain_data[1][idx]),
+                    self.pretrain_data[idx][0],
+                    self.pretrain_data[idx][1],
+                    self.state_delimiter.join(self.pretrain_data[idx][2]),
                     [
                         self.state_delimiter.join(x)
-                        for x in self.pretrain_data[2][idx][: negative_samples - 1]
+                        for x in self.pretrain_data[idx][3][: negative_samples - 2]
                     ]
-                    + [self.end_of_reasoning],
+                    + [self.end_of_reasoning]
+                    + [self.wrong_choice],
                 )
         else:
-            if self.pretrain_data[1][idx] == [self.end_of_reasoning]:
+            if self.pretrain_data[idx][2] == [
+                self.end_of_reasoning
+            ] or self.pretrain_data[idx][2] == [self.wrong_choice]:
                 append = []
             else:
-                append = [self.end_of_reasoning]
+                append = [self.end_of_reasoning] + [self.wrong_choice]
             return (
-                self.pretrain_data[0][idx],
-                self.state_delimiter.join(self.pretrain_data[1][idx]),
-                [self.state_delimiter.join(x) for x in self.pretrain_data[2][idx]]
+                self.pretrain_data[idx][0],
+                self.pretrain_data[idx][1],
+                self.state_delimiter.join(self.pretrain_data[idx][2]),
+                [self.state_delimiter.join(x) for x in self.pretrain_data[idx][3]]
                 + append,
             )
 
@@ -249,11 +304,12 @@ class RewardPredictorDataset(Dataset):
         if self.limit_size is not None:
             shuffled_indices = list(range(len(self.pretrain_data[0])))
             self.rand.shuffle(shuffled_indices)
-            self.pretrain_data = (
-                [self.pretrain_data[0][i] for i in shuffled_indices[: self.limit_size]],
-                [self.pretrain_data[1][i] for i in shuffled_indices[: self.limit_size]],
-                [self.pretrain_data[2][i] for i in shuffled_indices[: self.limit_size]],
-            )
+            self.rand.shuffle(self.pretrain_data)
+            self.pretrain_data = self.pretrain_data[: self.limit_size]
+        # for i in range(100):
+        #     print(self.pretrain_data[i][0])
+        #     print(self.pretrain_data[i][1])
+        #     print(self.pretrain_data[i][2])
 
     def get_pretrain_data(self):
         result = []
@@ -265,31 +321,31 @@ class RewardPredictorDataset(Dataset):
                 self.max_depth,
                 self.state_delimiter,
                 self.end_of_reasoning,
+                self.wrong_choice,
             ),
         ) as pool, tqdm.tqdm(total=len(self.data)) as pbar:
             for (idx, transitions) in pool.imap_unordered(
                 self.creator.get_transitions_for_sample, range(len(self.data)),
             ):
                 pbar.update()
-                if self.limit_neg_transition_num is not None:
-                    new_transitions = []
-                    for trans in transitions:
-                        self.rand.shuffle(trans[2])
-                        new_transitions.append(
-                            (
-                                trans[0],
-                                trans[1],
-                                trans[2][: self.limit_neg_transition_num],
-                            )
+
+                new_transitions = []
+                for trans in transitions:
+                    self.rand.shuffle(trans[2])
+                    new_transitions.append(
+                        (
+                            self.data[idx][0],
+                            trans[0],
+                            trans[1],
+                            trans[2][: self.limit_neg_transition_num]
+                            if self.limit_neg_transition_num is not None
+                            else trans[2],
                         )
-                    transitions = new_transitions
-                result.append((idx, transitions))
+                    )
+                result.append((idx, new_transitions))
         transitions = [res[1] for res in sorted(result, key=lambda res: res[0])]
         transitions = [ttr for tr in transitions for ttr in tr]
-        states = [trans[0] for trans in transitions]
-        actions = [trans[1] for trans in transitions]
-        wrong_actions = [trans[2] for trans in transitions]
-        return states, actions, wrong_actions
+        return transitions
 
 
 class TrainPathCreator:
@@ -312,7 +368,8 @@ class TrainPathCreator:
             source_sentence=self.data[idx][1],
             target_sentence=self.data[idx][2],
             intermediate_nodes=self.data[idx][3],
-            max_depth_for_each_node=2,
+            find_target=True,
+            max_depth_for_each_node=self.max_depth,
         )
         return self.data[idx][0], (result[0], result[1])
 
@@ -352,20 +409,25 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
 
     def __init__(
         self,
-        data: List[Tuple[str, str, str]],
+        data: List[Tuple[str, str, List[str]]],
         predictor,
         matcher: BaseMatcher,
         existing_ids: Set[str] = None,
         max_steps: int = 2,
         max_depth: int = 2,
-        beam_size: int = 20,
+        expand_choice_num: int = 4,
+        beam_size: int = 1,
         return_beam_num: int = 1,
         max_inference_num: int = 20000,
         min_logits: Union[float, None] = None,
         inference_batch_size: int = 128,
         state_delimiter: str = ", ",
         end_of_reasoning: str = "END_OF_REASONING",
+        wrong_choice: str = "WRONG_CHOICE",
         parallel: bool = True,
+        prune_low_probability_edges: bool = True,
+        prune_low_probability_edges_max_ratio: float = 0.7,
+        prune_low_probability_edges_min_logits: float = -12,
         stop_when_reaching_target_nodes: bool = True,
     ):
         """
@@ -380,6 +442,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         self.existing_ids = existing_ids or set()
         self.max_steps = max_steps
         self.max_depth = max_depth
+        self.expand_choice_num = expand_choice_num
         self.beam_size = beam_size
         self.return_beam_num = return_beam_num
         self.max_inference_num = max_inference_num
@@ -387,7 +450,15 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         self.inference_batch_size = inference_batch_size
         self.state_delimiter = state_delimiter
         self.end_of_reasoning = end_of_reasoning
+        self.wrong_choice = wrong_choice
         self.parallel = parallel
+        self.prune_low_probability_edges = prune_low_probability_edges
+        self.prune_low_probability_edges_max_ratio = (
+            prune_low_probability_edges_max_ratio
+        )
+        self.prune_low_probability_edges_min_logits = (
+            prune_low_probability_edges_min_logits
+        )
         self.stop_when_reaching_target_nodes = stop_when_reaching_target_nodes
 
     def __len__(self):
@@ -396,81 +467,76 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
     def __getitem__(self, data_idx):
         try:
             print(f"Processing idx = {data_idx}")
-            if self.data[data_idx][0] != "3H7Z272LX76UDNZ0QK447QVTCYVLPQ":
-                if self.data[data_idx][0] in self.existing_ids:
-                    print(f"Skipping idx = {data_idx}, id = {self.data[data_idx][0]}")
-                    return self.data[data_idx][0], None, 0
-            source_nodes, target_nodes = self.matcher.match_source_and_target_nodes(
-                self.data[data_idx][1], self.data[data_idx][2]
-            )
-            if len(source_nodes) == 0:
-                print("Warning: empty source nodes")
-            if len(target_nodes) == 0:
-                print("Warning: empty target nodes")
-            target_nodes_set = set(target_nodes)
-            visited_nodes = []
-            current_reached_nodes = source_nodes
-            state = (
-                "Question: "
-                + self.data[data_idx][1]
-                + " Choices: "
-                + self.data[data_idx][2]
-                + " Explain: "
-            )
-
-            # for profiling
-            inferenced_action_num = 0
-
-            q = []
-            pops = [0] * (self.max_steps + 1)
-            push_count = [0]
-            heapq.heappush(
-                q,
-                self.create_hypothesis(
-                    0,
-                    (),
-                    (state, visited_nodes, current_reached_nodes),
-                    self.return_and_increase(push_count),
-                ),
-            )
-
-            completed_sequences = []
-            completed_sequences_edges = []
-
-            while (
-                not len(completed_sequences) >= self.return_beam_num
-                and not len(q) == 0
-                and inferenced_action_num < self.max_inference_num
+            if (
+                self.data[data_idx][0] in self.existing_ids
+                and self.data[data_idx][0] != "30IQTZXKAK5MP0C5NIS23JP8BW0X0I"
             ):
-                h = heapq.heappop(q)
+                print(f"Skipping idx = {data_idx}, id = {self.data[data_idx][0]}")
+                return self.data[data_idx][0], None, 0
 
-                length = self.get_hypothesis_length(h)
-                if length > self.max_steps or pops[length] >= self.beam_size:
-                    continue
-                pops[length] += 1
+            annotation_cache = {}
+            prune_set = set()
+            all_completed_sequences = []
+            all_completed_sequences_edges = []
+            all_completed_sequences_choices = []
+            all_inferenced_action_num = 0
 
-                if self.is_hypothesis_ended(h):
-                    h = self.extend_hypothesis(
-                        h, (self.EOS, None), (), self.return_and_increase(push_count)
-                    )
-                    heapq.heappush(q, h)
-                else:
-                    (
-                        state,
-                        visited_nodes,
-                        current_reached_nodes,
-                    ) = self.get_additional_data(h)
+            choices = self.preselect_choices(data_idx)
+            for choice in choices:
+                source_nodes, target_nodes = self.matcher.match_source_and_target_nodes(
+                    self.data[data_idx][1]
+                    if "Context:" not in self.data[data_idx][1]
+                    else self.data[data_idx][1][
+                        : self.data[data_idx][1].find("Context:")
+                    ],
+                    choice,
+                )
+                if len(source_nodes) == 0:
+                    print("Warning: empty source nodes")
+                if len(target_nodes) == 0:
+                    print("Warning: empty target nodes")
+                target_nodes_set = set(target_nodes)
+                visited_nodes = []
+                current_reached_nodes = source_nodes
+                state = (
+                    "Question: "
+                    + self.data[data_idx][1]
+                    + " Choice: "
+                    + choice
+                    + " Explain: "
+                )
 
-                    has_reached = (
-                        len(set(current_reached_nodes).intersection(target_nodes_set))
-                        > 0
-                    )
+                # for profiling
+                inferenced_action_num = 0
 
-                    if (
-                        length > 0
-                        and has_reached
-                        and self.stop_when_reaching_target_nodes
-                    ) or (length > 0 and len(current_reached_nodes) == 1):
+                q = []
+                pops = [0] * (self.max_steps + 1)
+                push_count = [0]
+                heapq.heappush(
+                    q,
+                    self.create_hypothesis(
+                        0,
+                        (),
+                        (state, visited_nodes, current_reached_nodes),
+                        self.return_and_increase(push_count),
+                    ),
+                )
+
+                completed_sequences = []
+                completed_sequences_edges = []
+                while (
+                    not len(completed_sequences) >= self.return_beam_num
+                    and not len(q) == 0
+                    and inferenced_action_num < self.max_inference_num
+                ):
+                    h = heapq.heappop(q)
+
+                    length = self.get_hypothesis_length(h)
+                    if length > self.max_steps or pops[length] >= self.beam_size:
+                        continue
+                    pops[length] += 1
+
+                    if self.is_hypothesis_ended(h):
                         h = self.extend_hypothesis(
                             h,
                             (self.EOS, None),
@@ -479,165 +545,302 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
                         )
                         heapq.heappush(q, h)
                     else:
-                        # if length = 0, only add possible edges
-                        # if length > 0 and length < max_steps, add possible edges and EOS
-                        # if length == max_steps, only add EOS
-
-                        # And use EOS instead of end_of_reasoning (string comparison) to speed up
-                        if length == self.max_steps:
-                            annotations = [self.EOS]
-                            list_of_sub_path_next_nodes = [[]]
-                            list_of_sub_path_raw_next_nodes = [-1]
-                            list_of_sub_path_edges = [[]]
-                        else:
-                            (
-                                list_of_sub_path_annotations,
-                                list_of_sub_path_next_nodes,
-                                list_of_sub_path_raw_next_nodes,
-                                list_of_sub_path_edges,
-                            ) = self.find_available_choices(
-                                visited_nodes,
-                                current_reached_nodes,
-                                target_nodes,
-                                length,
-                                self.data[data_idx][0],
-                                self.parallel,
-                            )
-                            annotations = [
-                                self.state_delimiter.join(sub_path_annotations)
-                                for sub_path_annotations in list_of_sub_path_annotations
-                            ]
-                            if len(annotations) == 0 and length == 0:
-                                print("Warning: empty starting annotations")
-                            if len(annotations) == 0 or length > 0:
-
-                                annotations = annotations + [self.EOS]
-                                list_of_sub_path_next_nodes = (
-                                    list_of_sub_path_next_nodes + [[]]
-                                )
-                                list_of_sub_path_raw_next_nodes = (
-                                    list_of_sub_path_raw_next_nodes + [-1]
-                                )
-                                list_of_sub_path_edges = list_of_sub_path_edges + [[]]
-
-                        all_masked, log_prob = self.log_prob(
+                        (
                             state,
-                            annotations
-                            if annotations[-1] is not self.EOS
-                            else annotations[:-1] + [self.end_of_reasoning],
-                            return_top=length == 0,
-                        )
-                        inferenced_action_num += len(annotations)
+                            visited_nodes,
+                            current_reached_nodes,
+                        ) = self.get_additional_data(h)
 
-                        # prune paths with the same end nodes, keep the one with the highest log probability
-                        highest_scores = {}
-                        for ann_idx, (annotation, next_node) in enumerate(
-                            zip(annotations, list_of_sub_path_raw_next_nodes)
-                        ):
-                            if (
-                                next_node not in highest_scores
-                                or log_prob[highest_scores[next_node]]
-                                < log_prob[ann_idx]
-                            ):
-                                highest_scores[next_node] = ann_idx
-
-                        suboptimal_paths = t.ones(
-                            log_prob.shape, dtype=t.bool, device=log_prob.device
-                        )
-
-                        suboptimal_paths[list(highest_scores.values())] = 0
-                        log_prob.masked_fill_(suboptimal_paths, -20)
-
-                        score = self.get_score(h)
-                        if not all_masked:
-                            for action in range(len(annotations)):
-                                sub_path_nodes = [
-                                    edge[0] for edge in list_of_sub_path_edges[action]
-                                ] + [edge[2] for edge in list_of_sub_path_edges[action]]
-
-                                new_score = score + log_prob[action].item()
-
-                                if annotations[action] is self.EOS:
-                                    new_additional_data = ()
-                                else:
-                                    new_state = (
-                                        state
-                                        + self.state_delimiter
-                                        + annotations[action]
-                                    )
-                                    new_visited_nodes = list(
-                                        set(visited_nodes + sub_path_nodes)
-                                    )
-                                    new_current_reached_nodes = list_of_sub_path_next_nodes[
-                                        action
-                                    ]
-                                    new_additional_data = (
-                                        new_state,
-                                        new_visited_nodes,
-                                        new_current_reached_nodes,
-                                    )
-
-                                new_h = self.extend_hypothesis(
-                                    h,
-                                    (
-                                        annotations[action],
-                                        tuple(list_of_sub_path_edges[action])
-                                        if len(list_of_sub_path_edges[action]) > 0
-                                        else None,
-                                    ),
-                                    new_additional_data,
-                                    self.return_and_increase(push_count),
-                                    new_score,
+                        has_reached = (
+                            len(
+                                set(current_reached_nodes).intersection(
+                                    target_nodes_set
                                 )
+                            )
+                            > 0
+                        )
 
-                                heapq.heappush(q, new_h)
-                        else:
-                            # Assign probability 1 to EOS (log prob = 0)
-                            new_h = self.extend_hypothesis(
+                        if (
+                            length > 0
+                            and has_reached
+                            and self.stop_when_reaching_target_nodes
+                        ) or (length > 0 and len(current_reached_nodes) == 1):
+                            h = self.extend_hypothesis(
                                 h,
                                 (self.EOS, None),
                                 (),
                                 self.return_and_increase(push_count),
                             )
-                            heapq.heappush(q, new_h)
+                            heapq.heappush(q, h)
+                        else:
+                            # if length = 0, only add possible edges
+                            # if length > 0 and length < max_steps, add possible edges and EOS
+                            # if length == max_steps, only add EOS
 
-                if self.is_hypothesis_ended(q[0]):
-                    h = heapq.heappop(q)
-                    completed_sequences.append(self.get_sequence(h))
-                    completed_sequences_edges.append(self.get_sequence_edges(h))
+                            # And use EOS instead of end_of_reasoning (string comparison) to speed up
+                            if length == self.max_steps:
+                                annotations = [self.EOS]
+                                list_of_sub_path_next_nodes = [[]]
+                                list_of_sub_path_raw_next_nodes = [-1]
+                                list_of_sub_path_edges = [[]]
+                            else:
 
-            if inferenced_action_num >= self.max_inference_num:
-                print(f"idx = {data_idx}, inference bound reached, stopping early")
+                                (
+                                    list_of_sub_path_annotations,
+                                    list_of_sub_path_next_nodes,
+                                    list_of_sub_path_raw_next_nodes,
+                                    list_of_sub_path_edges,
+                                    annotations,
+                                ) = self.get_annotation_data(
+                                    data_idx,
+                                    visited_nodes,
+                                    current_reached_nodes,
+                                    target_nodes,
+                                    length,
+                                    annotation_cache,
+                                )
+                            all_masked, log_prob = self.log_prob(
+                                state,
+                                annotations
+                                if annotations[-1] is not self.EOS
+                                else annotations[:-1] + [self.end_of_reasoning],
+                                prune_set,
+                                return_top=length == 0,
+                            )
+                            inferenced_action_num += len(annotations)
 
-            if len(completed_sequences) == 0:
-                print(f"idx = {data_idx}, no completed sequence, force selection")
-                for i in range(self.return_beam_num):
-                    if len(q) == 0:
-                        break
-                    h = heapq.heappop(q)
-                    h = self.extend_hypothesis(
-                        h, (self.EOS, None), (), self.return_and_increase(push_count)
-                    )
-                    completed_sequences.append(self.get_sequence(h))
-                    completed_sequences_edges.append(self.get_sequence_edges(h))
+                            # prune paths with the same end nodes, keep the one with the highest log probability
+                            highest_scores = {}
+                            for ann_idx, (annotation, next_node) in enumerate(
+                                zip(annotations, list_of_sub_path_raw_next_nodes)
+                            ):
+                                if (
+                                    next_node not in highest_scores
+                                    or log_prob[highest_scores[next_node]]
+                                    < log_prob[ann_idx]
+                                ):
+                                    highest_scores[next_node] = ann_idx
+                            optimal_annotations = set(highest_scores.values())
 
+                            score = self.get_score(h)
+                            if not all_masked:
+                                for action in range(len(annotations)):
+                                    if action not in optimal_annotations:
+                                        continue
+                                    sub_path_nodes = [
+                                        edge[0]
+                                        for edge in list_of_sub_path_edges[action]
+                                    ] + [
+                                        edge[2]
+                                        for edge in list_of_sub_path_edges[action]
+                                    ]
+
+                                    new_score = score + log_prob[action].item()
+
+                                    if annotations[action] is self.EOS:
+                                        new_additional_data = ()
+                                    else:
+                                        new_state = (
+                                            state
+                                            + self.state_delimiter
+                                            + annotations[action]
+                                        )
+                                        new_visited_nodes = list(
+                                            set(visited_nodes + sub_path_nodes)
+                                        )
+                                        new_current_reached_nodes = list_of_sub_path_next_nodes[
+                                            action
+                                        ]
+                                        new_additional_data = (
+                                            new_state,
+                                            new_visited_nodes,
+                                            new_current_reached_nodes,
+                                        )
+
+                                    new_h = self.extend_hypothesis(
+                                        h,
+                                        (
+                                            annotations[action],
+                                            tuple(list_of_sub_path_edges[action])
+                                            if len(list_of_sub_path_edges[action]) > 0
+                                            else None,
+                                        ),
+                                        new_additional_data,
+                                        self.return_and_increase(push_count),
+                                        new_score,
+                                    )
+
+                                    heapq.heappush(q, new_h)
+                            else:
+                                # Assign probability 1 to EOS (log prob = 0)
+                                new_h = self.extend_hypothesis(
+                                    h,
+                                    (self.EOS, None),
+                                    (),
+                                    self.return_and_increase(push_count),
+                                )
+                                heapq.heappush(q, new_h)
+
+                    if self.is_hypothesis_ended(q[0]):
+                        h = heapq.heappop(q)
+                        completed_sequences.append(self.get_sequence(h))
+                        completed_sequences_edges.append(self.get_sequence_edges(h))
+
+                if inferenced_action_num >= self.max_inference_num:
+                    print(f"idx = {data_idx}, inference bound reached, stopping early")
+
+                if len(completed_sequences) == 0:
+                    print(f"idx = {data_idx}, no completed sequence, force selection")
+                    for i in range(self.return_beam_num):
+                        if len(q) == 0:
+                            break
+                        h = heapq.heappop(q)
+                        h = self.extend_hypothesis(
+                            h,
+                            (self.EOS, None),
+                            (),
+                            self.return_and_increase(push_count),
+                        )
+                        completed_sequences.append(self.get_sequence(h))
+                        completed_sequences_edges.append(self.get_sequence_edges(h))
+                all_completed_sequences += completed_sequences
+                all_completed_sequences_edges += completed_sequences_edges
+                all_completed_sequences_choices += [choice] * len(completed_sequences)
+                all_inferenced_action_num += inferenced_action_num
             return (
                 self.data[data_idx][0],
-                completed_sequences,
-                completed_sequences_edges,
-                inferenced_action_num,
+                all_completed_sequences,
+                all_completed_sequences_edges,
+                all_completed_sequences_choices,
+                all_inferenced_action_num,
             )
         except:
             traceback.print_exc()
             print(f"Skipping idx = {data_idx} because of the exception")
 
-    def log_prob(self, state, annotations, return_top=False):
+    def preselect_choices(self, data_idx):
+        # select choices with lowest wrong choice score
         logits = self.predictor(
-            state=[state] * len(annotations),
-            action=annotations,
+            state=[
+                (
+                    "Question: "
+                    + self.data[data_idx][1]
+                    + " Choice: "
+                    + choice
+                    + " Explain: "
+                )
+                for choice in self.data[data_idx][2]
+            ],
+            action=[self.wrong_choice] * len(self.data[data_idx][2]),
             inference=True,
             inference_batch_size=self.inference_batch_size,
         )
+        return [
+            self.data[data_idx][2][i]
+            for i in t.topk(
+                -logits,
+                k=min(self.expand_choice_num, len(self.data[data_idx][2])),
+                dim=0,
+            ).indices
+        ]
+
+    def get_annotation_data(
+        self,
+        data_idx,
+        visited_nodes,
+        current_reached_nodes,
+        target_nodes,
+        length,
+        annotation_cache,
+    ):
+        key = tuple(visited_nodes)
+        if key in annotation_cache:
+            annotation_data = annotation_cache[key]
+        else:
+            (
+                list_of_sub_path_annotations,
+                list_of_sub_path_next_nodes,
+                list_of_sub_path_raw_next_nodes,
+                list_of_sub_path_edges,
+            ) = self.find_available_choices(
+                visited_nodes,
+                current_reached_nodes,
+                target_nodes,
+                length,
+                self.data[data_idx][0],
+                self.parallel,
+            )
+
+            list_of_sub_path_next_nodes = list_of_sub_path_next_nodes + [[]]
+            list_of_sub_path_raw_next_nodes = list_of_sub_path_raw_next_nodes + [-1]
+            list_of_sub_path_edges = list_of_sub_path_edges + [[]]
+
+            annotations = [
+                self.state_delimiter.join(sub_path_annotations)
+                for sub_path_annotations in list_of_sub_path_annotations
+            ] + [self.EOS]
+
+            annotation_data = annotation_cache[key] = (
+                list_of_sub_path_annotations,
+                list_of_sub_path_next_nodes,
+                list_of_sub_path_raw_next_nodes,
+                list_of_sub_path_edges,
+                annotations,
+            )
+        return annotation_data
+
+    def log_prob(self, state, annotations, prune_set=None, return_top=False):
+        if self.prune_low_probability_edges and prune_set is not None:
+            allowed_annotations = [
+                annotation for annotation in annotations if annotation not in prune_set
+            ]
+            allowed_annotation_indices = [
+                idx
+                for idx, annotation in enumerate(annotations)
+                if annotation not in prune_set
+            ]
+            # in case all choices are masked
+            if len(allowed_annotations) == 0:
+                allowed_annotations = annotations
+                allowed_annotation_indices = list(range(len(annotations)))
+            partial_logits = self.predictor(
+                state=[state] * len(allowed_annotations),
+                action=allowed_annotations,
+                inference=True,
+                inference_batch_size=self.inference_batch_size,
+            )
+            partial_sorted, partio_indices = t.sort(partial_logits.cpu(), dim=0)
+            for s, idx, _ in zip(
+                partial_sorted,
+                partio_indices,
+                range(
+                    int(
+                        len(allowed_annotations)
+                        * self.prune_low_probability_edges_max_ratio
+                    )
+                ),
+            ):
+                if s < self.prune_low_probability_edges_min_logits and allowed_annotations[
+                    idx
+                ] not in (
+                    self.end_of_reasoning,
+                    self.wrong_choice,
+                ):
+                    prune_set.add(allowed_annotations[idx])
+            logits = t.full(
+                [len(annotations), 1],
+                -20,
+                dtype=partial_logits.dtype,
+                device=partial_logits.device,
+            )
+            logits[allowed_annotation_indices] = partial_logits
+        else:
+            logits = self.predictor(
+                state=[state] * len(annotations),
+                action=annotations,
+                inference=True,
+                inference_batch_size=self.inference_batch_size,
+            )
 
         all_masked = False
         if self.min_logits is not None:
@@ -657,7 +860,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
         else:
             log_prob = t.log(t.softmax(logits.squeeze(1), dim=0))
 
-        return all_masked, log_prob
+        return all_masked, log_prob.cpu()
 
     def find_available_choices(
         self, visited_nodes, current_reached_nodes, target_nodes, length, _id, parallel
@@ -666,6 +869,7 @@ class RewardPredictorBestFirstBeamSearchDataset(Dataset):
             visited_nodes,
             current_reached_nodes,
             target_nodes,
+            find_target=length == self.max_steps - 1,
             max_depth=self.max_depth,
             parallel=parallel,
         )
@@ -771,6 +975,8 @@ class RewardPredictorBestFirstBeamSearchDatasetWithFilter(
             current_reached_nodes,
             target_nodes,
             parallel=parallel,
+            find_target=length == self.max_steps - 1,
+            find_composite=length < self.max_steps - 1,
             max_depth=self.max_depth,
             filter_composite_nodes_by_f_beta=True,
             minimum_f_beta=0.35,
@@ -788,6 +994,8 @@ class RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes(
             current_reached_nodes,
             target_nodes,
             parallel=parallel,
+            find_target=length == self.max_steps - 1,
+            find_composite=length < self.max_steps - 1,
             max_depth=self.max_depth,
             allowed_composite_nodes=self.matcher.allowed_composite_nodes[_id],
         )

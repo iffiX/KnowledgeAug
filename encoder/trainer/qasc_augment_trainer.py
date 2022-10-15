@@ -1,4 +1,6 @@
 import os
+import random
+
 import tqdm
 import json
 import itertools
@@ -104,7 +106,8 @@ class QASCAugmentTrainer(pl.LightningModule):
 
     def val_dataloader(self):
         return DataLoader(
-            dataset=self.dataset.validate_dataset,
+            # dataset=self.dataset.validate_dataset,
+            dataset=self.dataset.test_dataset_with_reference,
             num_workers=self.config.load_worker_num,
             prefetch_factor=self.config.load_prefetch_per_worker,
             batch_size=self.config.batch_size,
@@ -301,7 +304,7 @@ class QASCAugmentTrainer(pl.LightningModule):
         ) as file:
             raw_contexts = json.load(file)
             contexts = {}
-            for id, (raw_paths, raw_path_edges) in raw_contexts.items():
+            for id, (raw_paths, raw_path_edges, _) in raw_contexts.items():
                 # if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
                 #     raw_paths = [
                 #         flatten_sublists(
@@ -315,7 +318,8 @@ class QASCAugmentTrainer(pl.LightningModule):
                 #         for x, y in zip(raw_path_edges, raw_paths)
                 #     ]
 
-                paths = [", ".join(path) + " # " for path in raw_paths][:4]
+                paths = [", ".join(path) + " # " for path in raw_paths]
+                random.shuffle(paths)
                 contexts[id] = list(dict.fromkeys(paths))
 
         # authoritative train context

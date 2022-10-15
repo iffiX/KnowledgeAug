@@ -154,6 +154,8 @@ public:
 
     std::vector<std::string> getNodes(const std::vector<long> &nodeIndexes) const;
 
+    std::tuple<size_t, size_t> getInAndOutEdgeNumOfNode(long node, bool excludeCompositeNodes = true) const;
+
     long getCompositeStart() const;
 
     long addCompositeNode(const std::string &compositeNode,

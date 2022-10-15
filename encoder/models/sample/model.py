@@ -65,6 +65,17 @@ class RewardPredictor(nn.Module):
         else:
             result = []
             with t.no_grad():
+                # sort state and action by combined length
+                all_data = [
+                    (len(s) + len(a), idx, s, a)
+                    for idx, (s, a) in enumerate(zip(state, action))
+                ]
+                all_data = sorted(all_data, key=lambda x: x[0])
+                key = [d[1] for d in all_data]
+                indices = [key.index(i) for i in range(len(state))]
+                state = [d[2] for d in all_data]
+                action = [d[3] for d in all_data]
+
                 for start in range(0, len(state), inference_batch_size):
                     batch_encoding = self.tokenizer(
                         state[start : start + inference_batch_size],
@@ -77,4 +88,4 @@ class RewardPredictor(nn.Module):
                     result.append(
                         self.fc(self.base(**batch_encoding).last_hidden_state[:, 0, :])
                     )
-            return t.cat(result, dim=0)
+                return t.cat(result, dim=0)[indices]

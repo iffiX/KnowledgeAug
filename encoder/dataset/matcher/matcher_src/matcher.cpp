@@ -327,6 +327,26 @@ vector<string> KnowledgeBase::getNodes(const vector<long> &nodeIndexes) const {
     return result;
 }
 
+tuple<size_t, size_t> KnowledgeBase::getInAndOutEdgeNumOfNode(long node, bool excludeCompositeNodes) const {
+    size_t inSize = 0, outSize = 0;
+    // Also work for composite nodes since they only have singe direction
+    // connection with non-composite component nodes.
+
+    if (edgeToTarget.find(node) != edgeToTarget.end()) {
+        for (size_t edgeIndex : edgeToTarget.at(node)) {
+            if (not isNodeComposite[get<0>(edges[edgeIndex])] or not excludeCompositeNodes)
+                inSize += 1;
+        }
+    }
+    if (edgeFromSource.find(node) != edgeFromSource.end()) {
+        for (size_t edgeIndex : edgeFromSource.at(node)) {
+            if (not isNodeComposite[get<2>(edges[edgeIndex])] or not excludeCompositeNodes)
+            outSize += 1;
+        }
+    }
+    return make_tuple(inSize, outSize);
+}
+
 long KnowledgeBase::getCompositeStart() const {
     for (long i = 0; i < isNodeComposite.size(); i++) {
         if (isNodeComposite[i])
@@ -383,12 +403,9 @@ long KnowledgeBase::addCompositeNode(const string &compositeNode,
             continue;
 
         long subNodeId = nodeMap.at(subNode.second.back());
-        bool hasOut = edgeFromSource.find(subNodeId) != edgeFromSource.end();
-        bool hasIn = edgeToTarget.find(subNodeId) != edgeToTarget.end();
-        size_t outSize = hasOut ? edgeFromSource.at(subNodeId).size() : 0;
-        size_t inSize = hasIn ? edgeToTarget.at(subNodeId).size() : 0;
+        auto sizes = getInAndOutEdgeNumOfNode(subNodeId, true);
 
-        if (outSize + inSize < splitNodeMinimumEdgeNum) {
+        if (get<0>(sizes) + get<1>(sizes) < splitNodeMinimumEdgeNum) {
 //#ifdef DEBUG
 //            cout << fmt::format("Splitting node [{}:{}]", nodes[subNodeId], subNodeId) << endl;
 //#endif
@@ -1379,6 +1396,7 @@ KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
     cout << "================================================================================" << endl;
 #endif
     unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
+    unordered_set<long> sourceNodesSet, targetNodesSet;
     SourceAndTargetNodes result;
     matchForSourceAndTarget(sourceSentence,
                             targetSentence,
@@ -1389,9 +1407,13 @@ KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
                             splitNodeMinimumEdgeNum,
                             splitNodeMinimumSimilarity);
     for (auto &sm : sourceMatch)
-        get<0>(result).push_back(kb.nodeMap.at(sm.second));
+        sourceNodesSet.insert(kb.nodeMap.at(sm.second));
     for (auto &tm : targetMatch)
-        get<1>(result).push_back(kb.nodeMap.at(tm.second));
+        targetNodesSet.insert(kb.nodeMap.at(tm.second));
+    for (auto &sn : sourceNodesSet)
+        get<0>(result).push_back(sn);
+    for (auto &tn : targetNodesSet)
+        get<1>(result).push_back(tn);
     return move(result);
 }
 
@@ -1960,11 +1982,8 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                                       size_t splitNodeMinimumEdgeNum,
                                       float splitNodeMinimumSimilarity) const {
     long nodeId = kb.nodeMap.at(node);
-    bool hasOut = kb.edgeFromSource.find(nodeId) != kb.edgeFromSource.end();
-    bool hasIn = kb.edgeToTarget.find(nodeId) != kb.edgeToTarget.end();
-    size_t outSize = hasOut ? kb.edgeFromSource.at(nodeId).size() : 0;
-    size_t inSize = hasIn ? kb.edgeToTarget.at(nodeId).size() : 0;
-    if (outSize + inSize < splitNodeMinimumEdgeNum) {
+    auto sizes = kb.getInAndOutEdgeNumOfNode(nodeId, true);
+    if (get<0>(sizes) + get<1>(sizes) < splitNodeMinimumEdgeNum) {
 //#ifdef DEBUG
 //        cout << fmt::format("Splitting node [{}:{}]", kb.nodes[nodeId], nodeId) << endl;
 //#endif

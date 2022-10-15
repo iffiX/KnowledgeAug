@@ -199,6 +199,7 @@ class QASC:
         self.train_path = os.path.join(qasc_path, "QASC_Dataset", "train.jsonl",)
         self.validate_path = os.path.join(qasc_path, "QASC_Dataset", "dev.jsonl",)
         self.test_path = os.path.join(qasc_path, "QASC_Dataset", "test.jsonl",)
+        self.reference_path = os.path.join(qasc_path, "qasc_manual.txt")
         self.corpus_path = os.path.join(
             qasc_corpus_path, "QASC_Corpus", "QASC_Corpus.txt"
         )

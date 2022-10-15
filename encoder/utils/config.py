@@ -177,6 +177,7 @@ class QASCSampleTrainConfig(BaseModel):
     return_beam_num: int = 5
     min_logits: Union[float, None] = None
     max_inference_num: int = 20000
+    expand_choice_num: int = 4
     state_delimeter: str = ", "
     end_of_reasoning: str = "END_OF_REASONING"
     negative_samples: int = 31

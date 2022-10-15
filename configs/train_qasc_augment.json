@@ -1,9 +1,9 @@
 {
     "configs": [
         {
-            "accumulate_grad_batches": 2,
+            "accumulate_grad_batches": 4,
             "base_type": "microsoft/deberta-v3-large",
-            "batch_size": 4,
+            "batch_size": 2,
             "epochs": 20,
             "l2_regularization": 0,
             "learning_rate": 5e-6,

@@ -56,11 +56,12 @@ class QASCMatcher(BaseMatcher):
         super(QASCMatcher, self).__init__(tokenizer, matcher)
 
         self.matcher.kb.disable_edges_with_weight_below(1)
-        self.matcher.kb.disable_edges_of_relationships(["RelatedTo", "HasContext"])
+        self.matcher.kb.disable_edges_of_relationships(["HasContext"])
 
         self.added_qasc_corpus_facts = None
         self.allowed_composite_nodes = {}
         self.fact_to_composite_node = {}
+        self.composite_node_to_fact = {}
         self.add_qasc_corpus()
 
     def add_qasc_facts(self, train_and_validate=False):
@@ -252,6 +253,8 @@ class QASCMatcher(BaseMatcher):
             self.allowed_composite_nodes[question_id] = [
                 self.fact_to_composite_node[f] for f in question_allowed_facts[:3000]
             ]
+        for fact, node in self.fact_to_composite_node.items():
+            self.composite_node_to_fact[node] = fact
         logging.info(f"Added {len(tokens)} composite nodes")
 
     def __reduce__(self):

@@ -16,6 +16,7 @@ from transformers import (
 )
 from encoder.dataset.download import QASC
 from encoder.dataset.matcher.qasc import QASCMatcher
+from encoder.models.embedder import Embedder
 from encoder.utils.settings import (
     preprocess_cache_dir,
     model_cache_dir,
@@ -23,7 +24,7 @@ from encoder.utils.settings import (
     proxies,
     huggingface_mirror,
 )
-from encoder.utils.file import PickleCache, open_file_with_create_directories
+from encoder.utils.file import JSONCache, PickleCache, open_file_with_create_directories
 from .base import StaticIterableDataset
 from .utils import normalize_t5_input
 
@@ -40,7 +41,7 @@ class QASCBaseDataset:
         # Word piece is stabler for matching purpose
         self.matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
         self.matcher = QASCMatcher(tokenizer=self.matcher_tokenizer)
-        self.commonsense_qa = QASC().require()
+        self.qasc = QASC().require()
 
         with PickleCache(
             os.path.join(preprocess_cache_dir, "qasc.data"), self.generate_data,
@@ -48,10 +49,20 @@ class QASCBaseDataset:
             self.train_data = cache.data["train"]
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
+
+        with JSONCache(
+            os.path.join(preprocess_cache_dir, "qasc_relevant_questions.json"),
+            self.generate_relevant_question_ids,
+        ) as cache:
+            self.relevant_questions = cache.data
+
         rand = random.Random(42)
         rand.shuffle(self.train_data)
         self.set_corpus()
         self.validate_qasc_corpus_retrieval_rate()
+        self.test_reference = self.parse_reference(self.qasc.reference_path)
+        for i in range(300):
+            self.test_data[i]["label"] = self.test_reference[self.test_data[i]["id"]]
 
     @property
     def train_dataset(self):
@@ -66,6 +77,10 @@ class QASCBaseDataset:
     @property
     def test_dataset(self):
         return StaticIterableDataset(len(self.test_data), self.generator, ("test",))
+
+    @property
+    def test_dataset_with_reference(self):
+        return StaticIterableDataset(300, self.generator, ("test",))
 
     def generator(self, index: int, split: str):
         """
@@ -187,7 +202,7 @@ class QASCBaseDataset:
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
                     if answer == choice:
-                        file.write(f'"{preprocessed["id"]}","{answer_keys[label]}"\n')
+                        file.write(f'"{preprocessed["id"]}","{answer_keys[i]}"\n')
                         break
                 else:
                     missing += 1
@@ -212,18 +227,16 @@ class QASCBaseDataset:
 
     def generate_data(self):
         # return {
-        #     "train": self.parse_data(self.commonsense_qa.train_path, "train"),
-        #     "validate": self.parse_data(self.commonsense_qa.validate_path, "validate"),
-        #     "test": self.parse_data(self.commonsense_qa.test_path, "test"),
+        #     "train": self.parse_data(self.qasc.train_path, "train"),
+        #     "validate": self.parse_data(self.qasc.validate_path, "validate"),
+        #     "test": self.parse_data(self.qasc.test_path, "test"),
         # }
         return {
-            "train": self.sort_facts(
-                self.parse_data(self.commonsense_qa.train_path, "train")
-            ),
+            "train": self.sort_facts(self.parse_data(self.qasc.train_path, "train")),
             "validate": self.sort_facts(
-                self.parse_data(self.commonsense_qa.validate_path, "validate")
+                self.parse_data(self.qasc.validate_path, "validate")
             ),
-            "test": self.parse_data(self.commonsense_qa.test_path, "test"),
+            "test": self.parse_data(self.qasc.test_path, "test"),
         }
 
     def sort_facts(self, split_data):
@@ -338,6 +351,39 @@ class QASCBaseDataset:
                 data.append(preprocessed)
         return data
 
+    def parse_reference(self, path):
+        reference = {}
+        with open(path, "r") as file:
+            for i, line in zip(range(300), file):
+                id_, label = line.strip("\n").split(",")
+                id_ = id_.strip('"')
+                label = ["A", "B", "C", "D", "E", "F", "G", "H"].index(label.strip('"'))
+                reference[id_] = label
+        return reference
+
+    def generate_relevant_question_ids(self):
+        return {
+            "train": self.find_relevant_questions(self.train_data),
+            "validate": self.find_relevant_questions(self.validate_data),
+            "test": self.find_relevant_questions(self.test_data),
+        }
+
+    def find_relevant_questions(self, data, find_range=3):
+        embedder = Embedder()
+        embeddings = embedder.embed([d["text_question"] for d in data])
+        similarity = t.mm(embeddings, embeddings.transpose(0, 1))
+        # exclude self
+        similarity.fill_diagonal_(0)
+        relevant_data = {}
+        for idx, d in enumerate(data):
+            rel_data = []
+            for compare_idx in range(idx - find_range, idx + find_range + 1):
+                if 0 <= compare_idx < len(data) and compare_idx != idx:
+                    rel_data.append((similarity[idx, compare_idx], data[compare_idx]))
+            rel_data = sorted(rel_data, key=lambda x: x[0], reverse=True)
+            relevant_data[d["id"]] = [x[1] for x in rel_data]
+        return relevant_data
+
     def validate_qasc_corpus_retrieval_rate(self):
         for split, data in zip(
             ("train", "validate"), (self.train_data, self.validate_data)
@@ -418,13 +464,13 @@ class QASCAugmentDataset(QASCBaseDataset):
         super(QASCAugmentDataset, self).__init__(tokenizer)
 
         count = 0
-        for data in self.validate_data:
-            for fact in data["original_facts"]:
-                for path in self.augment_contexts[0][data["id"]]:
-                    if fact in path:
-                        count += 1
-                        break
-        print(f"Average retrieval length: {count / len(self.validate_data)}")
+        # for data in self.validate_data:
+        #     for fact in data["original_facts"]:
+        #         for path in self.augment_contexts[0][data["id"]]:
+        #             if fact in path:
+        #                 count += 1
+        #                 break
+        # print(f"Average retrieval length: {count / len(self.validate_data)}")
 
         for split, split_data in (
             ("train", self.train_data),
@@ -480,12 +526,10 @@ class QASCAugmentDataset(QASCBaseDataset):
                 [", ".join(self.get_augment_context(split, data["id"]))]
                 * len(data["choices"]),
                 [
-                    "Q: "
-                    + self.normalize_question(data["text_question"])
-                    + " Choices: "
-                    + ", ".join([c.replace(",", "") for c in data["choices"]])
-                    + " A: "
-                    + ch
+                    " Q: " + self.normalize_question(data["text_question"])
+                    # + " Choices: "
+                    # + ", ".join([c.replace(",", "") for c in data["choices"]])
+                    + " A: " + ch
                     for ch in data["choices"]
                 ],
                 truncation="only_first",
