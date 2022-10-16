@@ -326,14 +326,6 @@ class QASCSampleTrainer(pl.LightningModule):
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
             dataset=RewardPredictorBestFirstBeamSearchDatasetWithLimitedNodes(
-                # [
-                #     (
-                #         d["id"],
-                #         d["text_question"],
-                #         [c.replace(",", "") for c in d["choices"]],
-                #     )
-                #     for d in getattr(self.dataset, f"{split}_data")
-                # ],
                 [
                     (
                         d["id"],
@@ -349,24 +341,40 @@ class QASCSampleTrainer(pl.LightningModule):
                         [c.replace(",", "").strip(".").lower() for c in d["choices"]],
                     )
                     for d in getattr(self.dataset, f"{split}_data")
-                ][:1]
-                if split in ("train", "validate")
-                else [
-                    (
-                        d["id"],
-                        " ".join(
-                            [d["text_question"] + " Context: "]
-                            + [
-                                dd["text_question"]
-                                for dd in self.dataset.relevant_questions[split][
-                                    d["id"]
-                                ]
-                            ]
-                        ),
-                        [c.replace(",", "").strip(".").lower() for c in d["choices"]],
-                    )
-                    for d in getattr(self.dataset, f"{split}_data")
-                ][:300],
+                ],
+                # [
+                #     (
+                #         d["id"],
+                #         " ".join(
+                #             [d["text_question"] + " Context: "]
+                #             + [
+                #                 dd["text_question"]
+                #                 for dd in self.dataset.relevant_questions[split][
+                #                     d["id"]
+                #                 ]
+                #             ]
+                #         ),
+                #         [c.replace(",", "").strip(".").lower() for c in d["choices"]],
+                #     )
+                #     for d in getattr(self.dataset, f"{split}_data")
+                # ][:1]
+                # if split in ("train", "validate")
+                # else [
+                #     (
+                #         d["id"],
+                #         " ".join(
+                #             [d["text_question"] + " Context: "]
+                #             + [
+                #                 dd["text_question"]
+                #                 for dd in self.dataset.relevant_questions[split][
+                #                     d["id"]
+                #                 ]
+                #             ]
+                #         ),
+                #         [c.replace(",", "").strip(".").lower() for c in d["choices"]],
+                #     )
+                #     for d in getattr(self.dataset, f"{split}_data")
+                # ][:300],
                 self.reward_predictor,
                 self.dataset.matcher,
                 existing_ids=set(self.test_result.keys()),

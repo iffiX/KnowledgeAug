@@ -393,7 +393,6 @@ long KnowledgeBase::addCompositeNode(const string &compositeNode,
         throw invalid_argument(fmt::format(
                 "Connection mask is provided for composite node but size does not match, composite node: {}, connection mask: {}",
                 tokenizedCompositeNode.size(), connectionMask.size()));
-
     auto result = nodeTrie.matchForAll(tokenizedCompositeNode, false);
     unordered_map<long, float> components;
     unordered_set<long> connectedSource;

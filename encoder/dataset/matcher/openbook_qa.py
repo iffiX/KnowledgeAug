@@ -48,7 +48,7 @@ class OpenBookQAMatcher(BaseMatcher):
         else:
             logging.info("Initializing KnowledgeMatcher")
             matcher = KnowledgeMatcher(archive_path)
-        super(OpenBookQAMatcher, self).__init__(tokenizer, matcher)
+        super(OpenBookQAMatcher, self).__init__(tokenizer, matcher, archive_path)
 
         self.matcher.kb.disable_edges_with_weight_below(1)
 

@@ -20,5 +20,5 @@
     "stages": [
         "qasc_augment"
     ],
-    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_qasc_augment"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_qasc_augment"
 }

@@ -1,4 +1,5 @@
 import re
+import os
 import tqdm
 import nltk
 import spacy
@@ -133,7 +134,12 @@ class BaseMatcher:
     }
     STOPWORDS_SET = set(stopwords.words("english"))
 
-    def __init__(self, tokenizer: PreTrainedTokenizerBase, matcher: KnowledgeMatcher):
+    def __init__(
+        self,
+        tokenizer: PreTrainedTokenizerBase,
+        matcher: KnowledgeMatcher,
+        archive_path: str,
+    ):
         self.tokenizer = tokenizer
         self.matcher = matcher
         self.nlp = None
@@ -148,6 +154,15 @@ class BaseMatcher:
             for rel in matcher.kb.relationships
         ]
         self.composite_start = self.matcher.kb.get_composite_start()
+        if not os.path.exists(self.matcher.kb.node_embedding_file_name):
+            print("Did you move the preprocessed files?")
+            print(
+                f"Current embedding file path is: {self.matcher.kb.node_embedding_file_name}"
+            )
+            alternative_path = input("Alternative path:\n")
+            self.matcher.kb.set_node_embedding_file_name(alternative_path)
+            print(f"Set to {alternative_path}")
+            self.matcher.kb.save(archive_path)
 
     def find_closest_concept(self, target_concept: str, concepts: List[str]):
         if self.nlp is None:

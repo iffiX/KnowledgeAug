@@ -62,7 +62,7 @@ class ARCMatcher(BaseMatcher):
         else:
             logging.info("Initializing KnowledgeMatcher")
             matcher = KnowledgeMatcher(archive_path)
-        super(ARCMatcher, self).__init__(tokenizer, matcher)
+        super(ARCMatcher, self).__init__(tokenizer, matcher, archive_path)
 
         matcher.kb.enable_edges_of_relationships(
             ["DefinedAs", "DerivedFrom", "FormOf", "Synonym", "Antonym", "IsA", "HasA"]

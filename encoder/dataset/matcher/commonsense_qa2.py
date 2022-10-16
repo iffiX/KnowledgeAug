@@ -52,7 +52,7 @@ class CommonsenseQA2Matcher(BaseMatcher):
         else:
             matcher = KnowledgeMatcher(archive_path)
 
-        super(CommonsenseQA2Matcher, self).__init__(tokenizer, matcher)
+        super(CommonsenseQA2Matcher, self).__init__(tokenizer, matcher, archive_path)
         self.matcher.kb.disable_edges_with_weight_below(1)
 
     def add_external_knowledge(self, external_knowledge: List[str]):

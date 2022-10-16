@@ -61,8 +61,13 @@ class QASCBaseDataset:
         self.set_corpus()
         self.validate_qasc_corpus_retrieval_rate()
         self.test_reference = self.parse_reference(self.qasc.reference_path)
-        for i in range(300):
-            self.test_data[i]["label"] = self.test_reference[self.test_data[i]["id"]]
+        for i in range(len(self.test_data)):
+            if i < 300:
+                self.test_data[i]["label"] = self.test_reference[
+                    self.test_data[i]["id"]
+                ]
+            else:
+                self.test_data[i]["label"] = -1
 
     @property
     def train_dataset(self):

@@ -56,7 +56,7 @@ class CommonsenseQAMatcher(BaseMatcher):
         else:
             matcher = KnowledgeMatcher(archive_path)
 
-        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher)
+        super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher, archive_path)
         self.matcher.kb.disable_edges_with_weight_below(1)
 
         self.add_generics_kb()

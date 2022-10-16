@@ -28,5 +28,5 @@
     "stages": [
         "qasc_sample"
     ],
-    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_qasc_sample"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_qasc_sample"
 }

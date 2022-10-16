@@ -53,7 +53,7 @@ class QASCMatcher(BaseMatcher):
         else:
             logging.info("Initializing KnowledgeMatcher")
             matcher = KnowledgeMatcher(archive_path)
-        super(QASCMatcher, self).__init__(tokenizer, matcher)
+        super(QASCMatcher, self).__init__(tokenizer, matcher, archive_path)
 
         self.matcher.kb.disable_edges_with_weight_below(1)
         self.matcher.kb.disable_edges_of_relationships(["HasContext"])

@@ -1,5 +1,6 @@
 #define FMT_HEADER_ONLY
 
+
 #include "matcher.h"
 #include "concept_net.h"
 #include "pybind11/pybind11.h"
@@ -7,25 +8,25 @@
 #include "backward-cpp/backward.hpp"
 
 ///#define ENABLE_DEBUG
-#ifdef ENABLE_DEBUG
-
-#include <execinfo.h>
-#include <csignal>
-
-void handler(int sig) {
-    void *array[20];
-    size_t size;
-
-    // get void*'s for all entries on the stack
-    size = backtrace(array, 20);
-
-    // print out all the frames to stderr
-    fprintf(stderr, "Error: signal %d:\n", sig);
-    backtrace_symbols_fd(array, size, STDERR_FILENO);
-    exit(1);
-}
-
-#endif
+//#ifdef ENABLE_DEBUG
+//
+//#include <execinfo.h>
+//#include <csignal>
+//
+//void handler(int sig) {
+//    void *array[20];
+//    size_t size;
+//
+//    // get void*'s for all entries on the stack
+//    size = backtrace(array, 20);
+//
+//    // print out all the frames to stderr
+//    fprintf(stderr, "Error: signal %d:\n", sig);
+//    backtrace_symbols_fd(array, size, STDERR_FILENO);
+//    exit(1);
+//}
+//
+//#endif
 
 namespace py = pybind11;
 
