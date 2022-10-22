@@ -7,12 +7,12 @@ from ..utils.config import *
 from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
 from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
-from .openbook_qa_trainer import OpenBookQATrainer
-from .openbook_qa_sample_trainer import OpenBookQASampleTrainer
+from .openbook_qa_sc_sample_trainer import OpenBookQASingleChoiceSampleTrainer
+from .openbook_qa_mc_sample_trainer import OpenBookQAMultipleChoiceSampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
-from .qasc_sample_trainer import QASCSampleTrainer
+from .qasc_sc_sample_trainer import QASCSingleChoiceSampleTrainer
+from .qasc_mc_sample_trainer import QASCMultipleChoiceSampleTrainer
 from .qasc_augment_trainer import QASCAugmentTrainer
-from .arc_trainer import ARCTrainer
 from .ensemble_trainer import EnsembleTrainer
 from .test_distributed_trainer import TestDistributedTrainer
 from pytorch_lightning import seed_everything
@@ -24,13 +24,13 @@ stage_name_to_trainer_map = {
     "commonsense_qa_sample": CommonsenseQASampleTrainer,
     "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,
-    "openbook_qa": OpenBookQATrainer,
-    "openbook_qa_sample": OpenBookQASampleTrainer,
+    "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainer,
+    "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
-    "qasc_sample": QASCSampleTrainer,
+    "qasc_sc_sample": QASCSingleChoiceSampleTrainer,
+    "qasc_mc_sample": QASCMultipleChoiceSampleTrainer,
     "qasc_augment": QASCAugmentTrainer,
     "test_distributed": TestDistributedTrainer,
-    "arc": ARCTrainer,
     "ensemble": EnsembleTrainer,
 }
 
@@ -120,6 +120,7 @@ def _train(
     os.makedirs(checkpoint_path, exist_ok=True)
     os.makedirs(log_path, exist_ok=True)
     save_config(config, os.path.join(config.working_directory, "config.json"))
+    save_top_k = int(getattr(stage_config, "save", False))
     checkpoint_callback = ModelCheckpoint(
         dirpath=checkpoint_path,
         filename="{epoch:02d}-"
@@ -127,7 +128,7 @@ def _train(
         + "-{"
         + stage_trainer.monitor
         + ":.3f}",
-        save_top_k=1 if getattr(stage_config, "save", False) else 0,
+        save_top_k=save_top_k,
         save_last=getattr(stage_config, "save_last", False),
         monitor=stage_trainer.monitor,
         mode=stage_trainer.monitor_mode,
@@ -176,9 +177,7 @@ def _train(
         plugins=plugins if len(plugins) > 0 else None,
         callbacks=[checkpoint_callback, early_stopping],
         logger=[t_logger],
-        reload_dataloaders_every_epoch=True
-        if isinstance(stage_trainer, (OpenBookQASampleTrainer),)
-        else False,
+        reload_dataloaders_every_epoch=False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,
         num_sanity_val_steps=0 if type(stage_trainer) == EnsembleTrainer else 2,
@@ -271,10 +270,6 @@ def run(config: Config, stage_index: int, mode: str = "train"):
         )
         trainer.stage_mode = mode
         if mode == "validate":
-            # if isinstance(stage_trainer, OpenBookQAAugmentTrainer):
-            #     trainer.fit(stage_trainer)
-            # else:
-            #     trainer.validate(stage_trainer)
             trainer.validate(stage_trainer)
         else:
             trainer.test(stage_trainer)

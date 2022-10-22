@@ -4,7 +4,8 @@ import copy
 import json
 import random
 import logging
-import datasets
+
+# import datasets
 from tqdm import tqdm
 from typing import List
 from transformers import PreTrainedTokenizerBase
@@ -59,7 +60,7 @@ class CommonsenseQAMatcher(BaseMatcher):
         super(CommonsenseQAMatcher, self).__init__(tokenizer, matcher, archive_path)
         self.matcher.kb.disable_edges_with_weight_below(1)
 
-        self.add_generics_kb()
+        # self.add_generics_kb()
         self.add_commonsense_qa_dataset()
         # self.add_openbook_qa_knowledge()
 

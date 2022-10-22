@@ -10,8 +10,19 @@ from encoder.utils.config import *
 
 logging.root.setLevel(logging.INFO)
 
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--debug", help="Attach to a remote PyCharm debug server", action="store_true"
+    )
+    parser.add_argument(
+        "--debug_ip", help="PyCharm debug server IP", type=str, default="localhost"
+    )
+    parser.add_argument(
+        "--debug_port", help="PyCharm debug server port", type=int, default=80
+    )
+
     subparsers = parser.add_subparsers(dest="command")
 
     p_train = subparsers.add_parser("train", help="Start training.")
@@ -125,7 +136,19 @@ if __name__ == "__main__":
             assert (
                 0 <= args.stage < len(config.stages)
             ), f"Stage number {args.stage} out of range."
+
+            if args.debug:
+                logging.info("Debug server enabled")
+                import pydevd_pycharm
+
+                pydevd_pycharm.settrace(
+                    args.debug_ip,
+                    port=args.debug_port,
+                    stdoutToServer=True,
+                    stderrToServer=True,
+                )
             run(config, args.stage, mode=args.command)
+
     elif args.command == "export_model":
         config = load_config(args.config)
         assert len(config.stages) == len(

@@ -39,7 +39,13 @@ class QASCBaseDataset:
         self.match_closest_when_no_equal = match_closest_when_no_equal
 
         # Word piece is stabler for matching purpose
-        self.matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
+        self.matcher_tokenizer = AutoTokenizer.from_pretrained(
+            "bert-base-uncased",
+            cache_dir=model_cache_dir,
+            proxies=proxies,
+            mirror=huggingface_mirror,
+            local_files_only=local_files_only,
+        )
         self.matcher = QASCMatcher(tokenizer=self.matcher_tokenizer)
         self.qasc = QASC().require()
 
@@ -56,6 +62,9 @@ class QASCBaseDataset:
         ) as cache:
             self.relevant_questions = cache.data
 
+        # since we will shuffle the training data (for randomly generating the reward predictor dataset),
+        # keep a copy of the original data
+        self.original_train_data = copy.deepcopy(self.train_data)
         rand = random.Random(42)
         rand.shuffle(self.train_data)
         self.set_corpus()
@@ -210,12 +219,31 @@ class QASCBaseDataset:
                         file.write(f'"{preprocessed["id"]}","{answer_keys[i]}"\n')
                         break
                 else:
-                    missing += 1
-                    print(
-                        f"Missing answer, choices: {preprocessed['choices']}, "
-                        f"answer: {answer}, using default A as answer."
-                    )
-                    file.write(f'"{preprocessed["id"]}","A"\n')
+                    is_missing = True
+                    if self.match_closest_when_no_equal:
+                        # Gestalt Pattern Matching
+                        # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
+                        possible_matches = difflib.get_close_matches(
+                            answer, preprocessed["choices"], n=1
+                        )
+                        if not len(possible_matches) == 0:
+                            print(
+                                f"Using answer {possible_matches[0]} for output {answer}, "
+                                f"question: {preprocessed['text_question']}, "
+                                f"choices: {preprocessed['choices']}"
+                            )
+                            is_missing = False
+                            file.write(
+                                f'"{preprocessed["id"]}",'
+                                f'"{answer_keys[preprocessed["choices"].index(possible_matches[0])]}"\n'
+                            )
+                    if is_missing:
+                        missing += 1
+                        print(
+                            f"Missing answer, choices: {preprocessed['choices']}, "
+                            f"answer: {answer}, using default A as answer."
+                        )
+                        file.write(f'"{preprocessed["id"]}","A"\n')
         print(f"Missing ratio {float(missing)/len(self.test_data)}")
 
     def set_corpus(self):
@@ -231,11 +259,6 @@ class QASCBaseDataset:
         self.matcher.matcher.set_corpus(corpus)
 
     def generate_data(self):
-        # return {
-        #     "train": self.parse_data(self.qasc.train_path, "train"),
-        #     "validate": self.parse_data(self.qasc.validate_path, "validate"),
-        #     "test": self.parse_data(self.qasc.test_path, "test"),
-        # }
         return {
             "train": self.sort_facts(self.parse_data(self.qasc.train_path, "train")),
             "validate": self.sort_facts(
@@ -349,7 +372,6 @@ class QASCBaseDataset:
                         for i, ch in enumerate(entry["question"]["choices"])
                         if ch["label"] == entry["answerKey"]
                     ][0]
-
                     preprocessed["label"] = label
                     preprocessed["text_answer"] = choices[label]
 
@@ -467,15 +489,6 @@ class QASCAugmentDataset(QASCBaseDataset):
         self.rand_train = True
 
         super(QASCAugmentDataset, self).__init__(tokenizer)
-
-        count = 0
-        # for data in self.validate_data:
-        #     for fact in data["original_facts"]:
-        #         for path in self.augment_contexts[0][data["id"]]:
-        #             if fact in path:
-        #                 count += 1
-        #                 break
-        # print(f"Average retrieval length: {count / len(self.validate_data)}")
 
         for split, split_data in (
             ("train", self.train_data),

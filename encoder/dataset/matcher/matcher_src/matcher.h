@@ -348,12 +348,12 @@ private:
                                  const std::vector<int> &targetSentence,
                                  const std::vector<int> &sourceMask,
                                  const std::vector<int> &targetMask,
-                                 std::unordered_map<size_t, std::vector<int>> &sourceMatch,
-                                 std::unordered_map<size_t, std::vector<int>> &targetMatch,
+                                 std::vector<std::pair<size_t, std::vector<int>>> &sourceMatch,
+                                 std::vector<std::pair<size_t, std::vector<int>>> &targetMatch,
                                  size_t splitNodeMinimumEdgeNum,
                                  float splitNodeMinimumSimilarity) const;
 
-    void normalizeMatch(std::unordered_map<size_t, std::vector<int>> &match,
+    void normalizeMatch(std::vector<std::pair<size_t, std::vector<int>>> &match,
                         const std::vector<int> &mask,
                         size_t position,
                         const std::vector<int> &node,

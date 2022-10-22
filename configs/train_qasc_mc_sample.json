@@ -1,0 +1,32 @@
+{
+    "configs": [
+        {
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 8,
+            "epochs": 20,
+            "negative_samples": 3,
+            "learning_rate": 5e-6,
+            "inference_batch_size": 128,
+            "load": false,
+            "max_seq_length": 256,
+            "pad_by_longest": true,
+            "min_logits": -2,
+            "max_steps": 3,
+            "max_depth": 2,
+            "max_inference_num": 50000,
+            "beam_size": 5,
+            "return_beam_num": 5,
+            "optimizer_class": "AdamW",
+            "state_delimeter": ", ",
+            "seed": 697474,
+            "save": 3
+        }
+    ],
+    "override_saved_config": {"0": {}},
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "qasc_mc_sample"
+    ],
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_qasc_mc_sample"
+}

@@ -832,7 +832,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     cout << "================================================================================" << endl;
 #endif
     // start token position of the node, tokens made up of the node
-    unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
+    vector<pair<size_t, vector<int>>> sourceMatch, targetMatch;
     matchForSourceAndTarget(sourceSentence,
                             targetSentence,
                             sourceMask,
@@ -845,12 +845,6 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     if (sourceMatch.empty()) {
 #ifdef DEBUG
         cout << "Source match result is empty, return" << endl;
-#endif
-        return move(PathResult());
-    }
-    if (targetMatch.empty() and findTarget) {
-#ifdef DEBUG
-        cout << "Target match result is empty, return" << endl;
 #endif
         return move(PathResult());
     }
@@ -879,7 +873,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     searchIds.emplace_back(unordered_set<long>(sourceNodes.begin(), sourceNodes.end()));
     for (auto &interNode : intermediateNodes)
         searchIds.emplace_back(unordered_set<long>{kb.findNodes({interNode})[0]});
-    if (findTarget)
+    if (findTarget and not targetNodes.empty())
         searchIds.emplace_back(unordered_set<long>(targetNodes.begin(), targetNodes.end()));
 
 #ifdef DEBUG_DECISION
@@ -1394,7 +1388,7 @@ KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
     cout << "splitNodeMinimumSimilarity: " << splitNodeMinimumSimilarity << endl;
     cout << "================================================================================" << endl;
 #endif
-    unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
+    vector<pair<size_t, vector<int>>> sourceMatch, targetMatch;
     unordered_set<long> sourceNodesSet, targetNodesSet;
     SourceAndTargetNodes result;
     matchForSourceAndTarget(sourceSentence,
@@ -1457,7 +1451,7 @@ KnowledgeMatcher::matchByNodeEmbedding(const vector<int> &sourceSentence,
     cout << "================================================================================" << endl;
 #endif
     // start token position of the node, tokens made up of the node
-    unordered_map<size_t, vector<int>> sourceMatch, targetMatch;
+    vector<pair<size_t, vector<int>>> sourceMatch, targetMatch;
     matchForSourceAndTarget(sourceSentence,
                             targetSentence,
                             sourceMask,
@@ -1897,8 +1891,8 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
                                                const vector<int> &targetSentence,
                                                const vector<int> &sourceMask,
                                                const vector<int> &targetMask,
-                                               unordered_map<size_t, vector<int>> &sourceMatch,
-                                               unordered_map<size_t, vector<int>> &targetMatch,
+                                               vector<pair<size_t, vector<int>>> &sourceMatch,
+                                               vector<pair<size_t, vector<int>>> &targetMatch,
                                                size_t splitNodeMinimumEdgeNum,
                                                float splitNodeMinimumSimilarity) const {
     if (not sourceMask.empty() && sourceMask.size() != sourceSentence.size())
@@ -1974,7 +1968,7 @@ void KnowledgeMatcher::matchForSourceAndTarget(const vector<int> &sourceSentence
 
 }
 
-void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
+void KnowledgeMatcher::normalizeMatch(vector<pair<size_t, vector<int>>> &match,
                                       const vector<int> &mask,
                                       size_t position,
                                       const vector<int> &node,
@@ -1999,11 +1993,11 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
                                     mask)) {
                     long subNodeId = kb.nodeMap.at(subSubMatch);
                     if (kb.cosineSimilarity(subNodeId, nodeId) > splitNodeMinimumSimilarity) {
-                        match.emplace(position + subMatch.first, subSubMatch);
+                        match.emplace_back(make_pair(position + subMatch.first, subSubMatch));
 //#ifdef DEBUG
 //                        cout << fmt::format("Splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
 //#endif
-//                    } else {
+                    } else {
 //#ifdef DEBUG
 //                        cout << fmt::format("Ignore splitted node [{}:{}]", kb.nodes[subNodeId], subNodeId) << endl;
 //#endif
@@ -2012,7 +2006,7 @@ void KnowledgeMatcher::normalizeMatch(unordered_map<size_t, vector<int>> &match,
             }
         }
     } else {
-        match.emplace(position, node);
+        match.emplace_back(make_pair(position, node));
     }
 }
 

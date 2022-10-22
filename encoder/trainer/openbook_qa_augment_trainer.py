@@ -1,84 +1,42 @@
 import os
-import copy
-import tqdm
 import json
-import itertools
-import warnings
 import torch as t
-import torch.nn.functional as F
-import pytorch_lightning as pl
-from torch.utils.data import DataLoader
-from torch.distributed import all_gather_object, get_world_size, get_rank
-from transformers import (
-    T5ForConditionalGeneration,
-    AutoTokenizer,
-    AutoModel,
-    BatchEncoding,
-)
-from pytorch_lightning.utilities import rank_zero_only
-from .utils import (
-    collate_and_filter_outputs,
-    set_worker_sharing_strategy,
-    make_scheduler,
-)
-from encoder.models.multiple_choice.model import Model
+from torch.utils.data import DataLoader, RandomSampler
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
-from encoder.dataset.openbook_qa import OpenBookQADataset
-from encoder.dataset.openbook_qa_augment import OpenBookQAAugDataset
-from encoder.utils.file import JSONCache, TorchCache
-from encoder.utils.config import OpenBookQAAugmentTrainConfig, fix_missing
-from encoder.utils.settings import (
-    proxies,
-    model_cache_dir,
-    preprocess_cache_dir,
-    huggingface_mirror,
-    local_files_only,
-)
-from encoder.utils.adafactor import Adafactor
+from encoder.dataset.openbook_qa import OpenBookQABaseDataset, OpenBookQAAugmentDataset
+from encoder.dataset.sample import TrainPathGenerator
+from encoder.utils.file import JSONCache
+from encoder.utils.config import OpenBookQAAugmentTrainConfig
+from encoder.utils.settings import preprocess_cache_dir
+from .augment_base_trainer import AugmentBaseTrainer
+from .utils import set_worker_sharing_strategy
 
 
-class OpenBookQAAugmentTrainer(pl.LightningModule):
+class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
     def __init__(
         self,
         config: OpenBookQAAugmentTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
-        super().__init__()
-        self.save_hyperparameters()
-        warnings.filterwarnings("ignore")
-        fix_missing(config)
-        self.config = config
-        self.stage_result_path = stage_result_path
-        self.is_distributed = is_distributed
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            "t5-base" if "t5-" in self.config.base_type else config.base_type,
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            local_files_only=local_files_only,
+        super().__init__(
+            config=config,
+            stage_result_path=stage_result_path,
+            is_distributed=is_distributed,
         )
-        self.dataset = OpenBookQAAugDataset(
+        self.dataset = OpenBookQAAugmentDataset(
             tokenizer=self.tokenizer,
             augment_contexts=self.load_augment_contexts(),
-            similarity_embeddings=self.load_similarity_embeddings(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in self.config.base_type else "splitted",
         )
-        if "t5-" in self.config.base_type:
-            self.model = T5ForConditionalGeneration.from_pretrained(
-                config.base_type,
-                cache_dir=model_cache_dir,
-                proxies=proxies,
-                mirror=huggingface_mirror,
-                return_dict=True,
-                local_files_only=local_files_only,
-            )
-        else:
-            model_configs = config.model_configs or {}
-            self.model = Model(config.base_type, 4, **model_configs)
-        self._real_device = None
+        self.dataloader_args = {
+            "num_workers": self.config.load_worker_num,
+            "prefetch_factor": self.config.load_prefetch_per_worker,
+            "batch_size": self.config.batch_size,
+            "collate_fn": collate_function_dict_to_batch_encoding,
+            "worker_init_fn": set_worker_sharing_strategy,
+        }
 
     @property
     def monitor(self):
@@ -88,363 +46,121 @@ class OpenBookQAAugmentTrainer(pl.LightningModule):
     def monitor_mode(self):
         return "max"
 
-    @property
-    def real_device(self):
-        return self._real_device or self.device
-
     def train_dataloader(self):
+        gen = t.Generator()
+        gen.manual_seed(42)
         return DataLoader(
             dataset=self.dataset.train_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
+            sampler=RandomSampler(self.dataset.train_dataset, generator=gen),
+            **self.dataloader_args,
         )
 
     def val_dataloader(self):
-        if self.trainer.stage_mode == "train":
-            return [
-                DataLoader(
-                    dataset=self.dataset.validate_dataset,
-                    num_workers=self.config.load_worker_num,
-                    prefetch_factor=self.config.load_prefetch_per_worker,
-                    batch_size=self.config.batch_size,
-                    collate_fn=collate_function_dict_to_batch_encoding,
-                    worker_init_fn=set_worker_sharing_strategy,
-                ),
-                DataLoader(
-                    dataset=self.dataset.test_dataset,
-                    num_workers=self.config.load_worker_num,
-                    prefetch_factor=self.config.load_prefetch_per_worker,
-                    batch_size=self.config.batch_size,
-                    collate_fn=collate_function_dict_to_batch_encoding,
-                    worker_init_fn=set_worker_sharing_strategy,
-                ),
-            ]
-        else:
-            validate_dataset = self.dataset.validate_dataset
-            validate_dataset.length = 1
-            # self.dataset.test_data = self.dataset.test_data[339:340]
-            test_dataset = self.dataset.test_dataset
-            # test_dataset.length = 100
-            return [
-                DataLoader(
-                    dataset=validate_dataset,
-                    num_workers=self.config.load_worker_num,
-                    prefetch_factor=self.config.load_prefetch_per_worker,
-                    batch_size=1,
-                    collate_fn=collate_function_dict_to_batch_encoding,
-                    worker_init_fn=set_worker_sharing_strategy,
-                ),
-                DataLoader(
-                    dataset=test_dataset,
-                    num_workers=self.config.load_worker_num,
-                    prefetch_factor=self.config.load_prefetch_per_worker,
-                    batch_size=1,
-                    collate_fn=collate_function_dict_to_batch_encoding,
-                    worker_init_fn=set_worker_sharing_strategy,
-                ),
-            ]
+        return [
+            DataLoader(dataset=self.dataset.validate_dataset, **self.dataloader_args),
+            DataLoader(dataset=self.dataset.test_dataset, **self.dataloader_args),
+        ]
 
     def test_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.test_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
-
-    def on_fit_start(self):
-        if "t5-" in self.config.base_type and self.config.device_map is not None:
-            if self.is_distributed:
-                raise ValueError(
-                    "Parallelize T5 model is incompatible with distributed training."
-                )
-            start_device_id = [k for k, v in self.config.device_map.items() if 0 in v][
-                0
-            ]
-            # replace device property
-            self._real_device = f"cuda:{start_device_id}"
-            self.model.parallelize(self.config.device_map)
-        else:
-            self._real_device = None
-
-    # noinspection PyTypeChecker
-    def training_step(self, batch: BatchEncoding, batch_idx):
-        if "t5-" in self.config.base_type:
-            # answer shape [batch_size, sequence_length]
-            out = self.model(
-                input_ids=batch["sentence"].to(self.real_device),
-                attention_mask=batch["mask"].to(self.real_device),
-                labels=batch["answer"].to(self.real_device),
-            )
-        else:
-            out = self.model(
-                input_ids=batch["sentence"].to(self.real_device),
-                attention_mask=batch["mask"].to(self.real_device),
-                token_type_ids=batch["type_ids"].to(self.real_device),
-                labels=batch["label"].to(self.real_device),
-            )
-        return out.loss
-
-    # noinspection PyTypeChecker
-    def validation_step(self, batch: BatchEncoding, _batch_idx, _dataloader_idx):
-        if "t5-" in self.config.base_type:
-            out = self.model.generate(
-                batch["sentence"].to(self.real_device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device),
-                early_stopping=True,
-            )
-            result = t.full(
-                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-            )
-            result[:, : out.shape[1]] = out.to(device="cpu", dtype=t.float32)
-            batch = batch.to("cpu")
-            return {
-                "batch": batch,
-                "result": result,
-            }
-        else:
-            return {
-                "batch": batch.to("cpu"),
-                "result": self.model.predict(
-                    input_ids=batch["sentence"].to(self.real_device),
-                    attention_mask=batch["mask"].to(self.real_device),
-                    token_type_ids=batch["type_ids"].to(self.real_device),
-                ).to(device="cpu", dtype=t.float32),
-            }
-
-    def validation_epoch_end(self, outputs):
-        if self.is_distributed:
-            t.cuda.set_device(self.real_device)
-            gathered_outputs = [None] * get_world_size()
-            all_gather_object(gathered_outputs, outputs)
-            gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
-            self.validate_on_every_process(gathered_outputs)
-        else:
-            self.validate_on_every_process(outputs)
-
-    def validate_on_every_process(self, outputs):
-        for prefix, dataloader_idx in (("val", 0), ("test", 1)):
-            batch, result = collate_and_filter_outputs(outputs[dataloader_idx])
-            if "t5-" in self.config.base_type:
-                metrics = self.dataset.validate_tokens(batch, result)
-            else:
-                metrics = self.dataset.validate_logits(batch, result)
-            for key, value in metrics.items():
-                self.log(f"{prefix}_{key}", value, prog_bar=True, sync_dist=True)
-            if not self.is_distributed or get_rank() == 0:
-                print(f"Validation on {prefix} result:")
-                for key, value in metrics.items():
-                    print(f"{prefix}_{key}: {value}")
-
-    def test_step(self, batch: BatchEncoding, _batch_idx):
-        if "t5-" in self.config.base_type:
-            out = self.model.generate(
-                batch["sentence"].to(self.real_device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device),
-                early_stopping=True,
-            )
-            result = t.full(
-                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-            )
-            result[:, : out.shape[1]] = out.to(device="cpu", dtype=t.float32)
-            batch = batch.to("cpu")
-            return {
-                "batch": batch,
-                "result": result,
-            }
-        else:
-            return {
-                "batch": batch.to("cpu"),
-                "result": self.model.predict(
-                    input_ids=batch["sentence"].to(self.real_device),
-                    attention_mask=batch["mask"].to(self.real_device),
-                    token_type_ids=batch["type_ids"].to(self.real_device),
-                ).to(device="cpu", dtype=t.float32),
-            }
-
-    def test_epoch_end(self, outputs):
-        if self.is_distributed:
-            t.cuda.set_device(self.real_device)
-            gathered_outputs = [None] * get_world_size()
-            all_gather_object(gathered_outputs, outputs)
-            gathered_outputs = list(itertools.chain.from_iterable(gathered_outputs))
-            self.test_on_main_process(gathered_outputs)
-        else:
-            self.test_on_main_process(outputs)
-
-    @rank_zero_only
-    def test_on_main_process(self, outputs):
-        _, result = collate_and_filter_outputs(
-            outputs, [d["id"] for d in self.dataset.test_data]
-        )
-        if "t5-" in self.config.base_type:
-            self.dataset.generate_test_result_tokens(result, self.stage_result_path)
-        else:
-            self.dataset.generate_test_result_logits(result, self.stage_result_path)
-
-    def configure_optimizers(self):
-        if self.config.optimizer_class == "Adafactor":
-            optim = Adafactor(
-                self.parameters(),
-                lr=self.config.learning_rate,
-                weight_decay=self.config.l2_regularization,
-            )
-        else:
-            optim_cls = getattr(t.optim, self.config.optimizer_class)
-            optim = optim_cls(
-                self.parameters(),
-                lr=self.config.learning_rate,
-                weight_decay=self.config.l2_regularization,
-            )
-        training_steps = (
-            len(self.dataset.train_dataset)
-            * self.config.epochs
-            // self.config.accumulate_grad_batches
-        )
-        sch = make_scheduler(
-            optim,
-            self.config.scheduler_warmup_proportion,
-            training_steps,
-            self.config.scheduler_cycles,
-        )
-        return (
-            [optim],
-            [
-                {
-                    # REQUIRED: The scheduler instance
-                    "scheduler": sch,
-                    "monitor": self.monitor,
-                }
-            ],
-        )
+        return DataLoader(dataset=self.dataset.test_dataset, **self.dataloader_args)
 
     def load_augment_contexts(self):
-        dataset = OpenBookQADataset(tokenizer=None)
-        matcher = dataset.matcher
+        dataset = OpenBookQABaseDataset(tokenizer=None)
+
+        if self.config.augment_method not in (
+            "raw_decode",
+            "standard",
+            "standard_no_symbol",
+            "natural",
+        ):
+            raise ValueError(f"Invalid augment method {self.config.augment_method}")
+
         with open(
-            os.path.join(preprocess_cache_dir, "openbook_qa_sample_result.json"), "r"
+            os.path.join(
+                preprocess_cache_dir,
+                f"openbook_qa_sample_result_{self.config.sample_type}.json",
+            ),
+            "r",
         ) as file:
             raw_contexts = json.load(file)
             contexts = {}
-            for id, (raw_paths, raw_path_edges) in raw_contexts.items():
-                if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                    raw_paths = [
-                        matcher.sub_paths_to_annotations(
-                            x,
-                            templates="standard",
-                            prioritize_original_annotation=True,
-                        )[0]
-                        for x in raw_path_edges
-                    ]
-
+            for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
+                if self.config.augment_method == "raw_decode":
+                    pass
+                else:
+                    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
+                        raw_paths = [
+                            dataset.matcher.sub_paths_to_annotations(
+                                x,
+                                templates="standard",
+                                prioritize_original_annotation=True,
+                            )[0]
+                            for x in raw_path_edges
+                            if len(x) > 0
+                        ]
                 paths = [", ".join(path) + " # " for path in raw_paths]
                 contexts[id] = list(dict.fromkeys(paths))[:4]
 
         # authoritative train context
         train_contexts = {}
         with JSONCache(
-            os.path.join(preprocess_cache_dir, f"openbook_qa_sample_train_result.json"),
+            os.path.join(
+                preprocess_cache_dir,
+                f"openbook_qa_sample_train_result_{self.config.sample_type}.json",
+            ),
             generate_func=self.generate_train_paths,
         ) as cache:
             print(f"Loaded {len(contexts)} contexts")
             data = cache.data
         for id, (raw_paths, raw_path_edges) in data.items():
             if len(raw_paths) > 0:
-                raw_paths = dataset.matcher.sub_paths_to_annotations(
-                    raw_path_edges,
-                    templates="standard",
-                    prioritize_original_annotation=True,
-                )
-                # only the first level (corresponds to sample config)
+                if self.config.augment_method == "raw_decode":
+                    pass
+                else:
+                    raw_paths = dataset.matcher.sub_paths_to_annotations(
+                        raw_path_edges,
+                        templates="standard",
+                        prioritize_original_annotation=True,
+                    )
+                # only use the first level
                 train_contexts[id] = [", ".join(raw_paths[0]) + " # "]
+                # train_contexts[id] = [
+                #     ", ".join([xx for x in raw_paths for xx in x]) + " # "
+                # ]
             else:
                 train_contexts[id] = []
 
+        for split_name, split in zip(
+            ("train", "validate", "test"),
+            (dataset.train_data, dataset.validate_data, dataset.test_data,),
+        ):
+            total, count = 0, 0
+            for data in split:
+                if data["id"] in contexts:
+                    total += 1
+                    best_length = 0
+                    for path in contexts[data["id"]]:
+                        length = 0
+                        for fact in data["original_facts"]:
+                            if fact.replace(" ,", ",") in path:
+                                length += 1
+                            else:
+                                break
+                        if best_length < length:
+                            best_length = length
+                    count += best_length
+            print(f"Average retrieval length of {split_name}: {count / total}")
+
         return contexts, train_contexts
 
-    def load_similarity_embeddings(self):
-        with TorchCache(
-            os.path.join(
-                preprocess_cache_dir, f"openbook_qa_sample_similarity_embedding.pt"
-            ),
-            generate_func=self.generate_similarity_embeddings,
-        ) as cache:
-            return cache.data
-
     def generate_train_paths(self):
-        dataset = OpenBookQADataset(tokenizer=None)
-        train_paths = {}
-        for d in tqdm.tqdm(dataset.original_train_data):
-            result = dataset.matcher.find_shortest_path(
-                source_sentence=d["text_question"],
-                target_sentence=d["text_answer"],
-                intermediate_nodes=d["original_facts"],
-                max_depth_for_each_node=2,
-            )
-            train_paths[d["id"]] = (result[0], result[1])
-        return train_paths
-
-    def generate_similarity_embeddings(self):
-        dataset = OpenBookQADataset(tokenizer=None)
-        model_name = "sentence-transformers/all-mpnet-base-v2"
-        batch_size = 32
-        tokenizer = AutoTokenizer.from_pretrained(
-            model_name,
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            local_files_only=local_files_only,
+        dataset = OpenBookQABaseDataset(tokenizer=None)
+        generator = TrainPathGenerator(
+            [
+                (d["id"], d["text_question"], d["text_answer"], d["original_facts"],)
+                for d in dataset.train_data
+            ],
+            dataset.matcher,
+            max_depth=self.config.max_depth,
         )
-        model = AutoModel.from_pretrained(
-            model_name,
-            cache_dir=model_cache_dir,
-            proxies=proxies,
-            mirror=huggingface_mirror,
-            local_files_only=local_files_only,
-        )
-        texts = []
-        ids = []
-        for d in (
-            dataset.original_train_data
-            + dataset.original_validate_data
-            + dataset.original_test_data
-        ):
-            texts.append(d["text_question"])
-            # texts.append(d["text_question"] + " " + d["text_choices"])
-            ids.append(d["id"])
-
-        sub_embedding_list = []
-        with t.no_grad():
-            for b in tqdm.tqdm(range(0, len(texts), batch_size)):
-                batch = tokenizer(
-                    texts[b : b + batch_size],
-                    padding="longest",
-                    truncation=True,
-                    return_tensors="pt",
-                )
-                sub_embedding_list.append(
-                    self.mean_pooling(model(**batch)[0], batch["attention_mask"])
-                )
-        e = t.cat(sub_embedding_list)
-        e = F.normalize(e, p=2, dim=1)
-        train_size = len(dataset.original_train_data)
-        return (
-            ids[:train_size],
-            e[:train_size],
-            {data_id: data_h.unsqueeze(0) for data_id, data_h in zip(ids, e)},
-        )
-
-    def mean_pooling(self, token_embeddings, attention_mask):
-        input_mask_expanded = (
-            attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-        )
-        return t.sum(token_embeddings * input_mask_expanded, 1) / t.clamp(
-            input_mask_expanded.sum(1), min=1e-9
-        )
+        return generator.paths

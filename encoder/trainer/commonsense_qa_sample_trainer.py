@@ -21,9 +21,9 @@ from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.commonsense_qa import CommonsenseQABaseDataset
 from encoder.prompter.commonsense_qa import CommonsenseQAPrompter
 from encoder.dataset.sample import (
-    RewardPredictorDataset,
-    RewardPredictorDatasetCreatorWithFilter,
-    RewardPredictorBestFirstBeamSearchDatasetWithFilter,
+    RewardPredictorSingleChoiceDataset,
+    RewardPredictorSingleChoiceDatasetCreatorWithFilter,
+    RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithFilter,
 )
 
 from encoder.utils.config import CommonsenseQASampleTrainConfig, fix_missing
@@ -127,7 +127,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
         self.reward_predictor.load_state_dict(t.load(config.initial_weight_path))
 
         self.reward_predictor_datasets = {
-            split: RewardPredictorDataset(
+            split: RewardPredictorSingleChoiceDataset(
                 f"commonsense_qa_{split}",
                 [
                     (
@@ -149,7 +149,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
                 else self.config.negative_shuffle_seed + get_rank(),
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
-                creator=RewardPredictorDatasetCreatorWithFilter,
+                creator=RewardPredictorSingleChoiceDatasetCreatorWithFilter,
                 limit_size=100 if split == "validate" else None,
             )
             for split in ("train", "validate")
@@ -345,7 +345,7 @@ class CommonsenseQASampleTrainer(pl.LightningModule):
 
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
-            dataset=RewardPredictorBestFirstBeamSearchDatasetWithFilter(
+            dataset=RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithFilter(
                 # [
                 #     (d["id"], d["text_question"], ", ".join(d["choices"]),)
                 #     for d in getattr(self.dataset, f"{split}_data")

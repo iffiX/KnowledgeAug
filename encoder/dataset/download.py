@@ -138,6 +138,10 @@ class OpenBookQA:
             "Additional",
             "crowdsourced-facts.txt",
         )
+        # TODO: add download function
+        self.search_result_path = os.path.join(
+            openbook_qa_path, "openbook_qa_search_data.txt"
+        )
 
     def require(self):
         openbook_qa_path = str(os.path.join(dataset_cache_dir, "openbook_qa"))

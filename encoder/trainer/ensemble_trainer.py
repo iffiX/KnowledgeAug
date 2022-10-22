@@ -6,7 +6,6 @@ from collections import Counter
 from torch.utils.data import DataLoader
 from transformers import BatchEncoding
 from .utils import collate_and_filter_outputs
-from .openbook_qa_trainer import OpenBookQATrainer
 from encoder.dataset.base import SizeOnePlaceholderDataset
 from encoder.utils.config import EnsembleTrainConfig
 
