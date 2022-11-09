@@ -4,6 +4,7 @@ import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
+from .anli_augment_trainer import ANLIAugmentTrainer
 from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
 from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
@@ -21,6 +22,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
+    "anli_augment": ANLIAugmentTrainer,
     "commonsense_qa_sample": CommonsenseQASampleTrainer,
     "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,

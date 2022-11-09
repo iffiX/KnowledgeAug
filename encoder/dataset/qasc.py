@@ -544,10 +544,10 @@ class QASCAugmentDataset(QASCBaseDataset):
                 [", ".join(self.get_augment_context(split, data["id"]))]
                 * len(data["choices"]),
                 [
-                    " Q: " + self.normalize_question(data["text_question"])
-                    # + " Choices: "
-                    # + ", ".join([c.replace(",", "") for c in data["choices"]])
-                    + " A: " + ch
+                    " Q: "
+                    + self.normalize_question(data["text_question"])
+                    + " A: "
+                    + ch
                     for ch in data["choices"]
                 ],
                 truncation="only_first",

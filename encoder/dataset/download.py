@@ -154,42 +154,6 @@ class OpenBookQA:
         return self
 
 
-class ARC:
-    ARC_URL = "https://s3-us-west-2.amazonaws.com/ai2-website/data/ARC-V1-Feb2018.zip"
-
-    def __init__(self):
-        arc_path = str(os.path.join(dataset_cache_dir, "arc"))
-        self.train_challenge_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Challenge", "ARC-Challenge-Train.jsonl"
-        )
-        self.validate_challenge_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Challenge", "ARC-Challenge-Dev.jsonl"
-        )
-        self.test_challenge_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Challenge", "ARC-Challenge-Test.jsonl"
-        )
-        self.train_easy_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Easy", "ARC-Easy-Train.jsonl"
-        )
-        self.validate_easy_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Easy", "ARC-Easy-Dev.jsonl"
-        )
-        self.test_easy_path = os.path.join(
-            arc_path, "ARC-V1-Feb2018-2", "ARC-Easy", "ARC-Easy-Test.jsonl"
-        )
-        self.corpus_path = os.path.join(arc_path, "ARC-V1-Feb2018-2", "ARC_Corpus.txt")
-
-    def require(self):
-        arc_path = str(os.path.join(dataset_cache_dir, "arc"))
-        if not os.path.exists(arc_path):
-            if not os.path.exists(str(arc_path) + ".zip"):
-                logging.info("Downloading ARC")
-                download_to(self.ARC_URL, str(arc_path) + ".zip")
-            logging.info("Decompressing")
-            decompress_zip(str(arc_path) + ".zip", arc_path)
-        return self
-
-
 class QASC:
     QASC_URL = "https://ai2-public-datasets.s3.amazonaws.com/qasc/qasc_dataset.tar.gz"
     QASC_CORPUS_URL = (
@@ -257,20 +221,23 @@ class CommonsenseQA2:
             str(os.path.join(commonsense_qa2_path, "CSQA2_dev.json.gz")),
             str(os.path.join(commonsense_qa2_path, "CSQA2_test_no_answers.json.gz")),
         ]
+        file_paths = [self.train_path, self.validate_path, self.test_path]
         if not os.path.exists(commonsense_qa2_path):
             os.makedirs(commonsense_qa2_path, exist_ok=True)
 
-            if any([not os.path.exists(cmp) for cmp in compressed_paths]):
-                logging.info("Downloading CommonsenseQA2")
-                for url, path in zip(
-                    [
-                        self.COMMONSENSE_QA2_TRAIN_URL,
-                        self.COMMONSENSE_QA2_VALIDATE_URL,
-                        self.COMMONSENSE_QA2_TEST_URL,
-                    ],
-                    compressed_paths,
-                ):
-                    download_to(url, path)
+        if any([not os.path.exists(cmp) for cmp in compressed_paths]):
+            logging.info("Downloading CommonsenseQA2")
+            for url, path in zip(
+                [
+                    self.COMMONSENSE_QA2_TRAIN_URL,
+                    self.COMMONSENSE_QA2_VALIDATE_URL,
+                    self.COMMONSENSE_QA2_TEST_URL,
+                ],
+                compressed_paths,
+            ):
+                download_to(url, path)
+
+        if any([not os.path.exists(file) for file in file_paths]):
             logging.info("Decompressing")
             for cmp, target_path in zip(
                 compressed_paths, [self.train_path, self.validate_path, self.test_path]
@@ -279,30 +246,81 @@ class CommonsenseQA2:
         return self
 
 
-class UnifiedQAIR:
-    UNIFIEDQA_IR_URL = (
-        "https://github.com/allenai/unifiedqa/raw/master/files/"
-        "arc-with-ir/ARC-OBQA-RegLivEnv-IR10V8.zip"
+class ANLI:
+    ANLI_TRAIN_DEV_URL = "https://storage.googleapis.com/ai2-mosaic/public/alphanli/alphanli-train-dev.zip"
+    ANLI_TEST_URL = (
+        "https://storage.googleapis.com/ai2-mosaic/public/alphanli/alphanli-test.zip"
     )
 
     def __init__(self):
-        unifiedqa_ir_path = str(os.path.join(dataset_cache_dir, "unifiedqa_ir"))
+        anli_path = str(os.path.join(dataset_cache_dir, "anli"))
+        self.train_path = os.path.join(anli_path, "train.jsonl",)
+        self.train_labels_path = os.path.join(anli_path, "train-labels.lst")
+        self.validate_path = os.path.join(anli_path, "dev.jsonl")
+        self.validate_labels_path = os.path.join(anli_path, "dev-labels.lst")
+        self.test_path = os.path.join(anli_path, "alphanli-test", "anli.jsonl")
+
+    def require(self):
+        anli_path = str(os.path.join(dataset_cache_dir, "anli"))
+        compressed_paths = [
+            str(os.path.join(anli_path, "alphanli-train-dev.zip")),
+            str(os.path.join(anli_path, "alphanli-test.zip")),
+        ]
+        file_paths = [
+            self.train_path,
+            self.train_labels_path,
+            self.validate_path,
+            self.validate_labels_path,
+            self.test_path,
+        ]
+        if not os.path.exists(anli_path):
+            os.makedirs(anli_path, exist_ok=True)
+
+        if any([not os.path.exists(cmp) for cmp in compressed_paths]):
+            logging.info("Downloading aNLI")
+            for url, path in zip(
+                [self.ANLI_TRAIN_DEV_URL, self.ANLI_TEST_URL,], compressed_paths,
+            ):
+                download_to(url, path)
+
+        if any([not os.path.exists(file) for file in file_paths]):
+            logging.info("Decompressing")
+            for cmp in compressed_paths:
+                decompress_zip(cmp, anli_path)
+        return self
+
+
+class ATOMIC2020:
+    ATOMIC2020_URL = (
+        "https://ai2-atomic.s3-us-west-2.amazonaws.com/data/atomic2020_data-feb2021.zip"
+    )
+
+    def __init__(self):
+        atomic2020_path = str(os.path.join(dataset_cache_dir, "atomic2020"))
         self.train_path = os.path.join(
-            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "train.jsonl",
+            atomic2020_path, "atomic2020_data-feb2021", "train.tsv",
         )
         self.validate_path = os.path.join(
-            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "dev.jsonl",
+            atomic2020_path, "atomic2020_data-feb2021", "dev.tsv",
         )
         self.test_path = os.path.join(
-            unifiedqa_ir_path, "ARC-OBQA-RegLivEnv-IR10V8", "test.jsonl",
+            atomic2020_path, "atomic2020_data-feb2021", "test.tsv",
         )
 
     def require(self):
-        unifiedqa_ir_path = str(os.path.join(dataset_cache_dir, "unifiedqa_ir"))
-        if not os.path.exists(unifiedqa_ir_path):
-            if not os.path.exists(str(unifiedqa_ir_path) + ".zip"):
-                logging.info("Downloading UnifiedQA IR annotations")
-                download_to(self.UNIFIEDQA_IR_URL, str(unifiedqa_ir_path) + ".zip")
+        atomic2020_path = str(os.path.join(dataset_cache_dir, "atomic2020"))
+        compressed_path = str(
+            os.path.join(atomic2020_path, "atomic2020_data-feb2021.zip")
+        )
+        file_paths = [self.train_path, self.validate_path, self.test_path]
+        if not os.path.exists(atomic2020_path):
+            os.makedirs(atomic2020_path, exist_ok=True)
+
+        if not os.path.exists(compressed_path):
+            logging.info("Downloading ATOMIC2020")
+            download_to(self.ATOMIC2020_URL, compressed_path)
+
+        if any([not os.path.exists(file) for file in file_paths]):
             logging.info("Decompressing")
-            decompress_zip(str(unifiedqa_ir_path) + ".zip", unifiedqa_ir_path)
+            decompress_zip(compressed_path, atomic2020_path)
         return self

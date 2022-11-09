@@ -269,6 +269,55 @@ vector<long> KnowledgeBase::findNodes(const vector<string> &nod, bool quiet) con
     return move(ids);
 }
 
+vector<Edge>
+KnowledgeBase::findEdges(const vector<string> &source_nodes,
+                         const vector<string> &relations,
+                         const vector<string> &target_nodes,
+                         bool quiet) const {
+    if (source_nodes.size() != target_nodes.size() or source_nodes.size() != relations.size())
+        throw invalid_argument("Source node size, relation size, target node size should be the same");
+    vector<Edge> result;
+    unordered_map<string, long> relationship_map;
+    long rel = 0;
+    for (auto & relationship : relationships)
+        relationship_map[relationship] = rel++;
+
+    auto source_node_ids = findNodes(source_nodes, quiet);
+    auto target_node_ids = findNodes(target_nodes, quiet);
+    vector<long> relation_ids;
+    for (auto & relation : relations) {
+        if (relationship_map.find(relation) != relationship_map.end()) {
+            relation_ids.push_back(relationship_map.at(relation));
+        }
+        else {
+            if (not quiet)
+                throw invalid_argument(fmt::format("Relation {} not found", relation));
+            else
+                relation_ids.push_back(-1);
+        }
+    }
+
+    for (size_t i = 0; i< source_nodes.size(); i++) {
+        auto edges = getEdges(source_node_ids[i], target_node_ids[i]);
+        bool found = false;
+        for (auto & edge : edges) {
+            if (get<1>(edge) == relation_ids[i]) {
+                found = true;
+                result.emplace_back(edge);
+                break;
+            }
+        }
+        if (not found) {
+            if (not quiet)
+                throw invalid_argument(fmt::format("Edge ({}) -[{}]-> ({}) not found", source_nodes[i], relations[i],
+                                                   target_nodes[i]));
+            else
+                result.emplace_back(make_tuple(-1, -1, -1, 0, ""));
+        }
+    }
+    return move(result);
+}
+
 unordered_set<long> KnowledgeBase::getNodeNeighbors(long node) const {
     if (adjacency.find(node) == adjacency.end())
         throw invalid_argument("Node doesn't exist");
@@ -1136,10 +1185,10 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 }
 
 KnowledgeMatcher::ChoiceResult
-KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
-                                       const std::vector<long> &startNodes,
-                                       const std::vector<long> &targetNodes,
-                                       const std::vector<long> &allowedCompositeNodes,
+KnowledgeMatcher::findAvailableChoices(const vector<long> &visitedNodes,
+                                       const vector<long> &startNodes,
+                                       const vector<long> &targetNodes,
+                                       const vector<long> &allowedCompositeNodes,
                                        int maxDepth,
                                        bool parallel,
                                        bool findTarget,
@@ -1332,12 +1381,12 @@ KnowledgeMatcher::findAvailableChoices(const std::vector<long> &visitedNodes,
 }
 
 vector<vector<string>>
-KnowledgeMatcher::subPathsToAnnotations(const std::vector<std::vector<Edge>> &subPaths,
-                                        const std::vector<std::string> &relationshipTemplates,
+KnowledgeMatcher::subPathsToAnnotations(const vector<vector<Edge>> &subPaths,
+                                        const vector<string> &relationshipTemplates,
                                         bool prioritizeOriginalAnnotation,
                                         bool lowerCase) const {
     if (relationshipTemplates.size() != kb.relationships.size())
-        throw std::invalid_argument(fmt::format(
+        throw invalid_argument(fmt::format(
                 "Relationship templates size {} doesn't match with relationship size {}",
                 relationshipTemplates.size(), kb.relationships.size()
         ));
@@ -1725,8 +1774,8 @@ string KnowledgeMatcher::edgeToStringAnnotation(const Edge &edge) const {
     return move(edgeAnno);
 }
 
-size_t KnowledgeMatcher::componentIntersection(const std::unordered_map<long, float> &sourceNodes,
-                                               const std::unordered_map<long, float> &targetNodes) {
+size_t KnowledgeMatcher::componentIntersection(const unordered_map<long, float> &sourceNodes,
+                                               const unordered_map<long, float> &targetNodes) {
     size_t count = 0;
     for (auto &node : sourceNodes)
         if (targetNodes.find(node.first) != targetNodes.end())
@@ -1866,7 +1915,7 @@ float KnowledgeMatcher::computeFBetaScoreWithCache(long node, const unordered_ma
     return ((1 + betaSquare) * recall * precision) / (recall + betaSquare * precision + 1e-6);
 }
 
-float KnowledgeMatcher::computeNodeCountSum(const std::unordered_map<long, float> &nodeCount) {
+float KnowledgeMatcher::computeNodeCountSum(const unordered_map<long, float> &nodeCount) {
     float sum = 0;
     for (auto &nc : nodeCount)
         sum += nc.second;

@@ -21,8 +21,6 @@ deepspeed==0.5.10
 Ninja
 fairscale==0.4.6
 clean-text[gpl,sklearn]
-periodictable
-chemparse
 sklearn
 openai
 requests

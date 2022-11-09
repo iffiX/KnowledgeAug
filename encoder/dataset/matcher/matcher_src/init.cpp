@@ -62,6 +62,11 @@ PYBIND11_MODULE(matcher, m) {
             .def("find_nodes", &KnowledgeBase::findNodes,
                  py::arg("nodes"),
                  py::arg("quiet") = false)
+            .def("find_edges", &KnowledgeBase::findEdges,
+                 py::arg("source_nodes"),
+                 py::arg("relations"),
+                 py::arg("target_nodes"),
+                 py::arg("quiet") = false)
             .def("get_edges", &KnowledgeBase::getEdges)
             .def("get_nodes", py::overload_cast<>(&KnowledgeBase::getNodes, py::const_))
             .def("get_nodes", py::overload_cast<const std::vector<long> &>(&KnowledgeBase::getNodes, py::const_))

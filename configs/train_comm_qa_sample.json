@@ -25,5 +25,5 @@
     "stages": [
         "commonsense_qa_sample"
     ],
-    "working_directory": "/home/muhan/data/workspace/knowledge_aug/train_comm_qa_sample"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_comm_qa_sample"
 }

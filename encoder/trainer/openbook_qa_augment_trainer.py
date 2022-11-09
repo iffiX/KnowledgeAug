@@ -20,6 +20,7 @@ class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
         is_distributed=False,
     ):
         super().__init__(
+            4,
             config=config,
             stage_result_path=stage_result_path,
             is_distributed=is_distributed,
@@ -99,7 +100,10 @@ class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
                             if len(x) > 0
                         ]
                 paths = [", ".join(path) + " # " for path in raw_paths]
-                contexts[id] = list(dict.fromkeys(paths))[:4]
+                if self.config.sample_type == "mc":
+                    contexts[id] = list(dict.fromkeys(paths))[:4]
+                else:
+                    contexts[id] = list(dict.fromkeys(paths))
 
         # authoritative train context
         train_contexts = {}

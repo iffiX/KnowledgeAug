@@ -69,15 +69,18 @@ class FactSelector:
         self.select_facts()
 
     def select_facts(self):
+        print("Selecting facts")
         self.initialize_processes(
             func=self.compute_embeddings_worker,
             initializer=self.compute_embeddings_initializer,
         )
 
         with t.no_grad():
+            print("Computing embeddings for queries")
             self.query_embeddings = self.compute_embeddings(
                 self.queries, chunk_size=self.chunk_size
             ).to("cuda:0")
+
             query_rank_of_facts = [
                 t.full([len(self.queries), self.max_facts], -1, dtype=t.long).to(
                     "cuda:0"
@@ -88,7 +91,8 @@ class FactSelector:
             ]
             for batch_start in range(0, len(self.facts), self.batch_size):
                 logging.info(
-                    f"Processing fact starting at line {batch_start} / {len(self.facts)}"
+                    f"Processing fact starting at line {batch_start} / {len(self.facts)}, "
+                    f"percent {100* batch_start / len(self.facts):.2f} %"
                 )
                 partial_fact_embeddings = (
                     self.compute_embeddings(

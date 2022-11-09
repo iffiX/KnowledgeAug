@@ -248,6 +248,13 @@ class CommonsenseQA2AugmentTrainConfig(AugmentBaseConfig):
     load_prefetch_per_worker: Optional[int] = 2
 
 
+class ANLIAugmentTrainConfig(AugmentBaseConfig):
+    max_seq_length: int = 256
+    generate_length: int = 20
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+
 class EnsembleTrainConfig(BaseModel):
     task_trainer_stage: str
     checkpoints: List[str]
@@ -306,6 +313,7 @@ class Config(BaseModel):
 
 def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
+        "anli_augment": ANLIAugmentTrainConfig,
         "commonsense_qa": CommonsenseQATrainConfig,
         "commonsense_qa_sample": CommonsenseQASampleTrainConfig,
         "commonsense_qa_augment": CommonsenseQAAugmentTrainConfig,

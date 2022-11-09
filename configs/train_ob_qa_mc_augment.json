@@ -23,5 +23,5 @@
     "stages": [
         "openbook_qa_augment"
     ],
-    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_ob_qa_augment"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_ob_qa_mc_augment"
 }

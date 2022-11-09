@@ -1,6 +1,7 @@
 import os
 import json
 import random
+import hashlib
 import torch as t
 from torch.utils.data import DataLoader, RandomSampler
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
@@ -21,6 +22,7 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
         is_distributed=False,
     ):
         super().__init__(
+            8,
             config=config,
             stage_result_path=stage_result_path,
             is_distributed=is_distributed,
@@ -119,7 +121,11 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
                         ]
 
                 paths = [", ".join(path) + " # " for path in raw_paths]
-                random.shuffle(paths)
+                if self.config.sample_type == "sc":
+                    random.Random(
+                        int(hashlib.sha1(id.encode("utf-8")).hexdigest(), 16)
+                        & 0xFFFFFFFF
+                    ).shuffle(paths)
                 contexts[id] = list(dict.fromkeys(paths))
 
         # authoritative train context

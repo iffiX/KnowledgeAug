@@ -27,7 +27,11 @@ from .utils import (
 
 class AugmentBaseTrainer(pl.LightningModule):
     def __init__(
-        self, config: Any, stage_result_path="./", is_distributed=False,
+        self,
+        choice_num: int,
+        config: Any,
+        stage_result_path="./",
+        is_distributed=False,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -55,7 +59,7 @@ class AugmentBaseTrainer(pl.LightningModule):
             )
         else:
             model_configs = config.model_configs or {}
-            self.model = Model(config.base_type, 4, **model_configs)
+            self.model = Model(config.base_type, choice_num, **model_configs)
         self._real_device = None
 
     @property
@@ -145,7 +149,7 @@ class AugmentBaseTrainer(pl.LightningModule):
                 self.log(f"{key}", value, prog_bar=True, sync_dist=True)
             if not self.is_distributed or get_rank() == 0:
                 for key, value in metrics.items():
-                    print(f"_{key}: {value}")
+                    print(f"{key}: {value}")
         else:
             for prefix, dataloader_idx in (("val", 0), ("test", 1)):
                 batch, result = collate_and_filter_outputs(outputs[dataloader_idx])

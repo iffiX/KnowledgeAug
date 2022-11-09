@@ -144,6 +144,11 @@ public:
 
     std::vector<long> findNodes(const std::vector<std::string> &nodes, bool quiet = false) const;
 
+    std::vector<Edge> findEdges(const std::vector<std::string> &source_nodes,
+                                const std::vector<std::string> &relations,
+                                const std::vector<std::string> &target_nodes,
+                                bool quiet = false) const;
+
     std::unordered_set<long> getNodeNeighbors(long node) const;
 
     std::vector<Edge> getEdges(long source = -1, long target = -1) const;
