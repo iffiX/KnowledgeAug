@@ -61,6 +61,7 @@ class RewardPredictor(nn.Module):
                 truncation=True,
                 return_tensors="pt",
             ).to(self.device)
+            # print(self.tokenizer.decode(batch_encoding["input_ids"][0]))
             return self.fc(self.base(**batch_encoding).last_hidden_state[:, 0, :])
         else:
             result = []

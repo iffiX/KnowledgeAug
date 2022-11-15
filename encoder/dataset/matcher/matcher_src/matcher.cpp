@@ -859,7 +859,8 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                                    const vector<int> &sourceMask,
                                    const vector<int> &targetMask,
                                    bool findTarget,
-                                   int maxDepthForEachNode,
+                                   size_t maxDepthForEachNode,
+                                   size_t minLevelsBeforeCheckingTargetReached,
                                    size_t splitNodeMinimumEdgeNum,
                                    float splitNodeMinimumSimilarity) const {
 #ifdef DEBUG
@@ -876,6 +877,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
     cout << fmt::format("targetMask: [{}]",
                         fmt::join(targetMask.begin(), targetMask.end(), ",")) << endl;
     cout << "maxDepthForEachNode: " << maxDepthForEachNode << endl;
+    cout << "minLevelsBeforeCheckingTargetReached: " << minLevelsBeforeCheckingTargetReached << endl;
     cout << "splitNodeMinimumEdgeNum: " << splitNodeMinimumEdgeNum << endl;
     cout << "splitNodeMinimumSimilarity: " << splitNodeMinimumSimilarity << endl;
     cout << "================================================================================" << endl;
@@ -976,10 +978,12 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
             startNodes.push_back(node.first);
 
         bool reached = false;
-        for (long startNode : startNodes) {
-            if (searchIds[level + 1].find(startNode) != searchIds[level + 1].end()) {
-                reached = true;
-                break;
+        if (level >= minLevelsBeforeCheckingTargetReached) {
+            for (long startNode: startNodes) {
+                if (searchIds[level + 1].find(startNode) != searchIds[level + 1].end()) {
+                    reached = true;
+                    break;
+                }
             }
         }
 

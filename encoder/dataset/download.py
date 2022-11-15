@@ -290,6 +290,53 @@ class ANLI:
         return self
 
 
+class SocialIQA:
+    SIQA_TRAIN_DEV_URL = "https://storage.googleapis.com/ai2-mosaic/public/socialiqa/socialiqa-train-dev.zip"
+    SIQA_TEST_URL = (
+        "https://storage.googleapis.com/ai2-mosaic/public/socialiqa/socialiqa-test.zip"
+    )
+
+    def __init__(self):
+        social_iqa_path = str(os.path.join(dataset_cache_dir, "social_iqa"))
+        train_dev_dir_path = os.path.join(social_iqa_path, "socialiqa-train-dev")
+        test_dir_path = os.path.join(social_iqa_path, "socialiqa-test")
+
+        self.train_path = os.path.join(train_dev_dir_path, "train.jsonl",)
+        self.train_labels_path = os.path.join(train_dev_dir_path, "train-labels.lst")
+        self.validate_path = os.path.join(train_dev_dir_path, "dev.jsonl")
+        self.validate_labels_path = os.path.join(train_dev_dir_path, "dev-labels.lst")
+        self.test_path = os.path.join(test_dir_path, "socialiqa.jsonl")
+
+    def require(self):
+        social_iqa_path = str(os.path.join(dataset_cache_dir, "social_iqa"))
+        compressed_paths = [
+            str(os.path.join(social_iqa_path, "socialiqa-train-dev.zip")),
+            str(os.path.join(social_iqa_path, "socialiqa-test.zip")),
+        ]
+        file_paths = [
+            self.train_path,
+            self.train_labels_path,
+            self.validate_path,
+            self.validate_labels_path,
+            self.test_path,
+        ]
+        if not os.path.exists(social_iqa_path):
+            os.makedirs(social_iqa_path, exist_ok=True)
+
+        if any([not os.path.exists(cmp) for cmp in compressed_paths]):
+            logging.info("Downloading SocialIQA")
+            for url, path in zip(
+                [self.SIQA_TRAIN_DEV_URL, self.SIQA_TEST_URL], compressed_paths,
+            ):
+                download_to(url, path)
+
+        if any([not os.path.exists(file) for file in file_paths]):
+            logging.info("Decompressing")
+            for cmp in compressed_paths:
+                decompress_zip(cmp, social_iqa_path)
+        return self
+
+
 class ATOMIC2020:
     ATOMIC2020_URL = (
         "https://ai2-atomic.s3-us-west-2.amazonaws.com/data/atomic2020_data-feb2021.zip"

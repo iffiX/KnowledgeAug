@@ -1,5 +1,4 @@
 import os
-import copy
 import json
 import itertools
 import warnings
@@ -19,21 +18,21 @@ from torch.distributed import (
 from transformers import BatchEncoding
 from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
-from encoder.dataset.qasc import QASCBaseDataset
+from encoder.dataset.social_iqa import SocialIQABaseDataset
 from encoder.dataset.sample import (
-    RewardPredictorMultipleChoiceDatasetCreatorWithLimitedNodes,
     RewardPredictorMultipleChoiceDataset,
+    RewardPredictorMultipleChoiceDatasetCreatorWithLimitedNodes,
     RewardPredictorMultipleChoiceBestFirstBeamSearchDatasetWithLimitedNodes,
 )
-from encoder.utils.config import QASCMultipleChoiceSampleTrainConfig, fix_missing
+from encoder.utils.config import SocialIQAMultipleChoiceSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.adafactor import Adafactor
 
 
-class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
+class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: QASCMultipleChoiceSampleTrainConfig,
+        config: SocialIQAMultipleChoiceSampleTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -44,38 +43,27 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
         self.config = config
         self.stage_result_path = stage_result_path
         self.is_distributed = is_distributed
-        self.dataset = QASCBaseDataset(tokenizer=None)
+        self.dataset = SocialIQABaseDataset(tokenizer=None,)
         self.reward_predictor = RewardPredictor(
             config.base_type,
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
-
-        matcher = copy.deepcopy(self.dataset.matcher)
-        self.dataset.matcher.add_qasc_facts(train_and_validate=False)
-        matcher.add_qasc_facts(train_and_validate=True)
-
         self.train_reward_predictor_dataset = RewardPredictorMultipleChoiceDataset(
-            "qasc_train",
+            f"social_iqa_train",
             [
                 (
                     d["id"],
-                    " ".join(
-                        [d["text_question"] + " Context: "]
-                        + [
-                            dd["text_question"]
-                            for dd in self.dataset.relevant_questions["train"][d["id"]]
-                        ]
-                    ),
+                    d["text_question"],
                     d["text_answer"],
-                    ", ".join(
-                        [c.replace(",", "").strip(".").lower() for c in d["choices"]]
-                    ),
-                    d["original_facts"],
+                    ", ".join(d["choices"]),
+                    d["facts"],
+                    d["choice_masks"][d["label"]],
+                    "--".join(d["choice_masks"]),
                 )
-                for d in self.dataset.train_data
+                for d in getattr(self.dataset, f"train_data")
             ],
-            matcher,
+            self.dataset.matcher,
             max_depth=self.config.max_depth,
             negative_samples=self.config.negative_samples,
             negative_shuffle_seed=self.config.negative_shuffle_seed
@@ -116,7 +104,7 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
         return self.create_sample_inference_dataloader_for_validate()
 
     def test_dataloader(self):
-        path = os.path.join(preprocess_cache_dir, "qasc_sample_result_mc.json")
+        path = os.path.join(preprocess_cache_dir, "social_iqa_sample_result_mc.json")
         if os.path.exists(path):
             with open(path, "r",) as file:
                 self.test_result.update(json.load(file))
@@ -146,10 +134,25 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         _, paths, *__ = batch[0]
         best_length = 0
+        # data = self.dataset.validate_data[self.validate_indices[batch_idx]]
+        # correct_choice_words = data["text_answer"].lower().split(" ")
+        # print(f"Question and context: {data['question']} {data['context']}")
+        # print(f"Answer: {data['text_answer']}")
+        # print(f"Choices: {data['text_choices']}")
+        #
+        # for idx, path in enumerate(paths):
+        #     print(f"Path {idx}: {' '.join(path)}")
+        #
+        # for path in enumerate(paths[:1]):
+        #     if any(word.strip(".") in " ".join(path) for word in correct_choice_words):
+        #         best_length = 1
+        #         break
+
+        best_length = 0
         for path in paths:
             length = 0
             for fact in self.dataset.validate_data[self.validate_indices[batch_idx]][
-                "original_facts"
+                "facts"
             ]:
                 if fact in " ".join(path):
                     length += 1
@@ -157,6 +160,16 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
                     break
             if best_length < length:
                 best_length = length
+
+        if best_length == 0:
+            data = self.dataset.validate_data[self.validate_indices[batch_idx]]
+            print(f"Question and context: {data['question']} {data['context']}")
+            print(f"Answer: {data['text_answer']}")
+            print(f"Choices: {data['text_choices']}")
+            print(f"Facts: {data['facts']}")
+            for idx, path in enumerate(paths):
+                print(f"Path {idx}: {' '.join(path)}")
+
         return {"idx": batch_idx, "best_length": best_length}
 
     def validation_epoch_end(self, outputs):
@@ -211,35 +224,55 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
     ):
         if not self.is_distributed or get_rank() == 0:
             result = self.test_result
-            sorted_outputs = [o[1][:4] for o in sorted(outputs, key=lambda o: o[0])]
-            for id, paths, path_edges, path_choices in sorted_outputs:
-                result[id] = (paths, path_edges, path_choices)
+            sorted_outputs = [o[1][:-1] for o in sorted(outputs, key=lambda o: o[0])]
+            for id_, paths, path_edges, path_choices in sorted_outputs:
+                result[id_] = (paths, path_edges, path_choices)
 
             with open(
-                os.path.join(preprocess_cache_dir, "qasc_sample_result_mc.json"), "w",
+                os.path.join(preprocess_cache_dir, "social_iqa_sample_result_mc.json"),
+                "w",
             ) as file:
                 json.dump(result, file, indent=2)
 
             for split_name, split in zip(
                 ("train", "validate"),
-                (self.dataset.train_data, self.dataset.validate_data),
+                (self.dataset.train_data, self.dataset.validate_data,),
             ):
-                total, count = 0, 0
+                total, fact_retrieval_count = 0, 0
                 for data in split:
                     if data["id"] in result:
                         total += 1
                         best_length = 0
+
+                        # for path in result[data["id"]][0]:
+                        #     path = " ".join(path)
+                        #     if any(
+                        #         segment.strip(".") in path
+                        #         for segment in data["text_answer"].lower().split(" ")
+                        #         # for segment in data["diff_choices"][
+                        #         #     data["label"]
+                        #         # ].split(" ")
+                        #     ):
+                        #         best_length = 1
+                        #         break
+
                         for path in result[data["id"]][0]:
                             length = 0
-                            for fact in data["original_facts"]:
+                            for fact in data["facts"]:
                                 if fact in " ".join(path):
                                     length += 1
                                 else:
                                     break
                             if best_length < length:
                                 best_length = length
-                        count += best_length
-                print(f"Average retrieval length of {split_name}: {count / total}")
+                        if best_length == 0:
+                            print(data["id"])
+
+                        fact_retrieval_count += best_length
+                print(
+                    f"Average retrieval length of {split_name}: "
+                    f"{fact_retrieval_count / total}"
+                )
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":
@@ -284,21 +317,9 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
                 [
                     (
                         data[i]["id"],
-                        " ".join(
-                            [data[i]["text_question"] + " Context: "]
-                            + [
-                                d["text_question"]
-                                for d in self.dataset.relevant_questions["validate"][
-                                    data[i]["id"]
-                                ]
-                            ]
-                        ),
-                        ", ".join(
-                            [
-                                c.replace(",", "").strip(".").lower()
-                                for c in data[i]["choices"]
-                            ]
-                        ),
+                        data[i]["context"] + " Context: " + data[i]["question"],
+                        ", ".join(data[i]["choices"]),
+                        "--".join(data[i]["choice_masks"]),
                     )
                     for i in self.validate_indices
                 ],
@@ -327,21 +348,9 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
                 [
                     (
                         d["id"],
-                        " ".join(
-                            [d["text_question"] + " Context: "]
-                            + [
-                                dd["text_question"]
-                                for dd in self.dataset.relevant_questions[split][
-                                    d["id"]
-                                ]
-                            ]
-                        ),
-                        ", ".join(
-                            [
-                                c.replace(",", "").strip(".").lower()
-                                for c in d["choices"]
-                            ]
-                        ),
+                        d["context"] + " Context: " + d["question"],
+                        ", ".join(d["choices"]),
+                        "--".join(d["choice_masks"]),
                     )
                     for d in getattr(self.dataset, f"{split}_data")
                 ],
@@ -357,7 +366,6 @@ class QASCMultipleChoiceSampleTrainer(pl.LightningModule):
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
-                stop_when_reaching_target_nodes=True,
             ),
             batch_size=1,
             collate_fn=lambda x: x,

@@ -18,7 +18,7 @@
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
-        "anli_augment"
+        "social_iqa_augment"
     ],
-    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_anli_augment"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_social_iqa_augment"
 }

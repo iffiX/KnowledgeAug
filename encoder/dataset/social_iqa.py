@@ -11,16 +11,17 @@ from tqdm import tqdm
 from itertools import chain
 from typing import List, Tuple, Dict, Union
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
-from encoder.dataset.download import ANLI
-from encoder.dataset.matcher.anli import ANLIMatcher
+from encoder.dataset.download import SocialIQA
+from encoder.dataset.matcher.social_iqa import SocialIQAMatcher
 from encoder.dataset.matcher.fact_selector import FactSelector
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.file import PickleCache, open_file_with_create_directories
+from encoder.models.embedder import Embedder
 from .base import StaticIterableDataset
 from .utils import normalize_t5_input
 
 
-class ANLIBaseDataset:
+class SocialIQABaseDataset:
     def __init__(
         self,
         tokenizer: Union[PreTrainedTokenizerBase, None],
@@ -31,18 +32,73 @@ class ANLIBaseDataset:
 
         # Word piece is stabler for matching purpose
         self.matcher_tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
-        self.matcher = ANLIMatcher(tokenizer=self.matcher_tokenizer)
-        self.anli = ANLI().require()
+        self.matcher = SocialIQAMatcher(tokenizer=self.matcher_tokenizer)
+        self.social_iqa = SocialIQA().require()
 
         with PickleCache(
-            os.path.join(preprocess_cache_dir, "anli.data"), self.generate_data,
+            os.path.join(preprocess_cache_dir, "social_iqa.data"), self.generate_data,
         ) as cache:
-            random.Random(42).shuffle(cache.data["train"])
-            self.train_data = cache.data["train"][: len(cache.data["train"]) // 8]
+            self.train_data = [
+                d for d in cache.data["train"] if len(d["text_question"]) < 300
+            ]
+            print(
+                f"Removed {len(cache.data['train']) - len(self.train_data)} "
+                f"train samples with very long contexts"
+            )
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
+            labels = [
+                3,
+                3,
+                2,
+                3,
+                3,
+                1,
+                1,
+                2,
+                2,
+                2,
+                1,
+                3,
+                3,
+                2,
+                1,
+                3,
+                1,
+                1,
+                1,
+                2,
+                2,
+                2,
+                1,
+                1,
+                2,
+                2,
+                2,
+                3,
+                2,
+                3,
+            ]
+            for i in range(30):
+                self.test_data[i]["label"] = labels[i] - 1
 
-        # self.generate_and_add_knowledge()
+        with PickleCache(
+            os.path.join(preprocess_cache_dir, "social_iqa_selected_knowledge.data"),
+            self.select_knowledge,
+        ) as cache:
+            question_allowed_knowledge, select_knowledge, mask = cache.data
+            self.matcher.add_atomic_knowledge(
+                question_allowed_knowledge, select_knowledge, mask
+            )
+        with PickleCache(
+            os.path.join(preprocess_cache_dir, "social_iqa_selected_facts.data"),
+            self.select_facts,
+        ) as cache:
+            question_facts = cache.data
+            # Select the most similar one as the intermediate fact
+            for data in chain(self.train_data, self.validate_data):
+                data["facts"] = question_facts[data["id"]]
+
         self.set_corpus()
 
     @property
@@ -58,6 +114,10 @@ class ANLIBaseDataset:
     @property
     def test_dataset(self):
         return StaticIterableDataset(len(self.test_data), self.generator, ("test",))
+
+    @property
+    def test_ref_dataset(self):
+        return StaticIterableDataset(30, self.generator, ("test",))
 
     def generator(self, index: int, split: str):
         """
@@ -153,28 +213,28 @@ class ANLIBaseDataset:
         logits = logits.cpu().numpy()
         labels = np.argmax(logits, axis=1).tolist()
         with open_file_with_create_directories(
-            os.path.join(directory, "anli.lst"), "w"
+            os.path.join(directory, "social_iqa.lst"), "w"
         ) as file:
             if len(labels) != len(self.test_data):
                 raise ValueError(
                     f"Label size {len(labels)} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["1\n", "2\n"]
+            answer_keys = ["1\n", "2\n", "3\n"]
             for label, preprocessed in zip(labels, self.test_data):
                 file.write(answer_keys[label])
 
     def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
         with open_file_with_create_directories(
-            os.path.join(directory, "anli.lst"), "w"
+            os.path.join(directory, "social_iqa.lst"), "w"
         ) as file:
             if tokens.shape[0] != len(self.test_data):
                 raise ValueError(
                     f"Token size {tokens.shape[0]} does not match "
                     f"test size {len(self.test_data)}"
                 )
-            answer_keys = ["1\n", "2\n"]
+            answer_keys = ["1\n", "2\n", "3\n"]
             for answer_tokens, preprocessed in zip(tokens, self.test_data):
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
                 for i, choice in enumerate(preprocessed["choices"]):
@@ -203,58 +263,18 @@ class ANLIBaseDataset:
 
     def generate_data(self):
         return {
-            "train": self.parse_data(self.anli.train_path, self.anli.train_labels_path),
-            "validate": self.parse_data(
-                self.anli.validate_path, self.anli.validate_labels_path
+            "train": self.parse_data(
+                "train", self.social_iqa.train_path, self.social_iqa.train_labels_path
             ),
-            "test": self.parse_data(self.anli.test_path),
+            "validate": self.parse_data(
+                "validate",
+                self.social_iqa.validate_path,
+                self.social_iqa.validate_labels_path,
+            ),
+            "test": self.parse_data("test", self.social_iqa.test_path),
         }
 
-    def generate_and_add_knowledge(self):
-        def generate():
-            queries = []
-            query_ids = []
-            for data in chain(self.train_data, self.validate_data, self.test_data,):
-                id_ = data["id"]
-                queries.append(data["choices"][0])
-                queries.append(data["choices"][1])
-                query_ids += [id_, id_]
-
-            texts, masks = self.matcher.get_atomic_knowledge_text_and_mask()
-            text_to_index = {t: idx for idx, t in enumerate(texts)}
-
-            fact_selector = FactSelector(
-                queries, texts, max_facts=3, inner_batch_size=1024
-            )
-
-            all_selected_facts = sorted(
-                list(set([f for facts in fact_selector.selected_facts for f in facts]))
-            )
-            all_selected_facts_mask = [
-                masks[text_to_index[f]] for f in all_selected_facts
-            ]
-            return (
-                fact_selector.selected_facts,
-                all_selected_facts,
-                all_selected_facts_mask,
-            )
-
-        with PickleCache(
-            os.path.join(
-                preprocess_cache_dir, "anli_augment_generator_selected_facts.data"
-            ),
-            generate,
-        ) as cache:
-            selected_facts, all_selected_facts, all_selected_facts_mask = cache.data
-
-        self.matcher.add_atomic_knowledge(all_selected_facts, all_selected_facts_mask)
-        for idx, data in enumerate(
-            chain(self.train_data, self.validate_data, self.test_data,)
-        ):
-            potential_facts = selected_facts[idx * 2 + data["label"]]
-            data["facts"] = [potential_facts[0]] if potential_facts else []
-
-    def parse_data(self, dataset_path, labels_path=None):
+    def parse_data(self, split, dataset_path, labels_path=None):
         data = []
         labels = []
         logging.info(f"Parsing {dataset_path}")
@@ -269,18 +289,19 @@ class ANLIBaseDataset:
                 all_entries.append((idx, entry))
 
         for idx, entry in tqdm(all_entries):
-            text_choices = self.generate_choice_str([entry["hyp1"], entry["hyp2"]])
+            text_choices = self.generate_choice_str(
+                [entry["answerA"], entry["answerB"], entry["answerC"]]
+            )
 
-            choices = [entry["hyp1"], entry["hyp2"]]
-            diff, mask = self.get_different_parts(entry["hyp1"], entry["hyp2"])
+            choices = [entry["answerA"], entry["answerB"], entry["answerC"]]
             preprocessed = {
-                "text_question": entry["obs1"] + " " + entry["obs2"],
+                "text_question": entry["context"] + " " + entry["question"],
                 "text_choices": text_choices,
                 "choices": choices,
-                "choice_masks": mask,
-                "diff_choices": diff,
-                "id": entry["story_id"] + "|" + str(idx),
-                "story_id": entry["story_id"],
+                "choice_masks": self.generate_choice_match_mask(choices),
+                "context": entry["context"],
+                "question": entry["question"],
+                "id": split + "|" + str(idx),
                 "facts": [],
             }
             if labels_path is not None:
@@ -292,55 +313,45 @@ class ANLIBaseDataset:
             data.append(preprocessed)
         return data
 
-    def get_different_parts(self, choice1, choice2):
-        words1 = set(
-            w.lower()
-            for w, pos in nltk.pos_tag(nltk.word_tokenize(choice1))
-            if pos.startswith("NN")
-            or pos.startswith("JJ")
-            or (pos.startswith("VB") and w.lower() not in self.matcher.VERB_FILTER_SET)
-        )
-        words2 = set(
-            w.lower()
-            for w, pos in nltk.pos_tag(nltk.word_tokenize(choice2))
-            if pos.startswith("NN")
-            or pos.startswith("JJ")
-            or (pos.startswith("VB") and w.lower() not in self.matcher.VERB_FILTER_SET)
-        )
-        selected_words1 = words1.difference(words2)
-        selected_words1 = sorted(
-            list(w for w in (selected_words1 or words1) if len(w) > 0)
-        )
-        selected_words2 = words2.difference(words1)
-        selected_words2 = sorted(
-            list(w for w in (selected_words2 or words2) if len(w) > 0)
-        )
-        mask1 = ["-"] * len(choice1)
-        mask2 = ["-"] * len(choice2)
-        choice1 = choice1.lower()
-        choice2 = choice2.lower()
-        for word in selected_words1:
-            start = 0
-            while True:
-                start = choice1.find(word, start)
-                if start != -1:
-                    mask1[start : start + len(word)] = ["+"] * len(word)
-                    start += len(word)
-                else:
-                    break
-        for word in selected_words2:
-            start = 0
-            while True:
-                start = choice2.find(word, start)
-                if start != -1:
-                    mask2[start : start + len(word)] = ["+"] * len(word)
-                    start += len(word)
-                else:
-                    break
-        return (
-            (" ".join(selected_words1), " ".join(selected_words2),),
-            ("".join(mask1), "".join(mask2)),
-        )
+    def generate_choice_match_mask(self, choices: List[str]):
+        words = []
+
+        for choice in choices:
+            words.append(
+                set(
+                    w.lower()
+                    for w, pos in nltk.pos_tag(nltk.word_tokenize(choice))
+                    if len(w) > 0
+                    and (
+                        pos.startswith("NN")
+                        or pos.startswith("JJ")
+                        or (
+                            pos.startswith("VB")
+                            and w.lower() not in self.matcher.VERB_FILTER_SET
+                        )
+                    )
+                )
+            )
+        different_words = [
+            words[0].difference(words[1].union(words[2])),
+            words[1].difference(words[0].union(words[2])),
+            words[2].difference(words[0].union(words[1])),
+        ]
+        masks = [["-"] * len(choice) for choice in choices]
+        for diff_words, mask, choice in zip(different_words, masks, choices):
+            if len(diff_words) == 0:
+                mask[:] = ["+" for _ in range(len(mask))]
+            choice = choice.lower()
+            for word in diff_words:
+                start = 0
+                while True:
+                    start = choice.find(word, start)
+                    if start != -1:
+                        mask[start : start + len(word)] = ["+"] * len(word)
+                        start += len(word)
+                    else:
+                        break
+        return ["".join(mask) for mask in masks]
 
     def generate_choice_str(self, choices: List[str]):
         result = ""
@@ -355,8 +366,105 @@ class ANLIBaseDataset:
             labels.append(f"({char})")
         return labels
 
+    def select_facts(self):
+        contexts = []
+        choices = []
+        query_ids = []
+        for data in chain(self.train_data, self.validate_data):
+            contexts.append(data["context"])
+            choices.append(data["text_answer"])
+            query_ids.append(data["id"])
+        texts, _ = self.matcher.get_atomic_knowledge_text_and_mask()
 
-class ANLIAugmentDataset(ANLIBaseDataset):
+        selected_facts = self.find_relative_knowledge_by_choice(
+            contexts, choices, texts
+        )
+
+        return {
+            id_: [allowed_facts[0]] if allowed_facts else []
+            for id_, allowed_facts in zip(query_ids, selected_facts)
+        }
+
+    def select_knowledge(self):
+        contexts = []
+        choices = []
+        query_ids = []
+        for data in chain(self.train_data, self.validate_data, self.test_data):
+            for choice in data["choices"]:
+                contexts.append(data["context"])
+                choices.append(choice)
+                query_ids.append(data["id"])
+        texts, masks = self.matcher.get_atomic_knowledge_text_and_mask()
+        text_to_index = {t: idx for idx, t in enumerate(texts)}
+
+        selected_facts = self.find_relative_knowledge_by_choice(
+            contexts, choices, texts
+        )
+
+        all_selected_facts = sorted(
+            list(set([f for facts in selected_facts for f in facts]))
+        )
+        all_selected_facts_mask = [masks[text_to_index[f]] for f in all_selected_facts]
+        allowed_facts = {}
+        for id_, query_allowed_facts in zip(query_ids, selected_facts):
+            if id_ not in allowed_facts:
+                allowed_facts[id_] = query_allowed_facts
+            else:
+                allowed_facts[id_] += query_allowed_facts
+        return (
+            allowed_facts,
+            all_selected_facts,
+            all_selected_facts_mask,
+        )
+
+    def find_relative_knowledge_by_choice(self, contexts, choices, texts):
+        embedder = Embedder("cuda:0")
+        fact_selector = FactSelector(
+            [ctx + " " + ch for ctx, ch in zip(contexts, choices)],
+            texts,
+            min_score=0.4,
+            max_facts=100,
+        )
+        all_selected_facts = []
+        print("Computing embeddings for contexts")
+        all_context_embeddings = embedder.embed(choices, show_prog_bar=True)
+        print("Computing embeddings for first level facts")
+        raw_selected_facts = sorted(
+            list(set([f for sf in fact_selector.selected_facts for f in sf]))
+        )
+        raw_selected_facts_idx = {f: idx for idx, f in enumerate(raw_selected_facts)}
+        raw_selected_facts_embeddings = embedder.embed(
+            raw_selected_facts, show_prog_bar=True
+        )
+        for idx, (context, selected_facts) in tqdm(
+            enumerate(zip(contexts, fact_selector.selected_facts)), total=len(contexts)
+        ):
+            if len(selected_facts) == 0:
+                all_selected_facts.append([])
+            else:
+                context_embedding = all_context_embeddings[idx : idx + 1]
+                fact_embeddings = t.cat(
+                    [
+                        raw_selected_facts_embeddings[
+                            raw_selected_facts_idx[f] : raw_selected_facts_idx[f] + 1
+                        ]
+                        for f in selected_facts
+                    ],
+                    dim=0,
+                )
+                similarity = t.sum(context_embedding * fact_embeddings, dim=1)
+                all_selected_facts.append(
+                    [
+                        selected_facts[i]
+                        for i in t.topk(
+                            similarity, k=min(10, len(selected_facts))
+                        ).indices
+                    ]
+                )
+        return all_selected_facts
+
+
+class SocialIQAAugmentDataset(SocialIQABaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
@@ -373,7 +481,7 @@ class ANLIAugmentDataset(ANLIBaseDataset):
         self.rand = random.Random(42)
         self.rand_train = True
 
-        super(ANLIAugmentDataset, self).__init__(tokenizer)
+        super(SocialIQAAugmentDataset, self).__init__(tokenizer)
         for split, split_data in (
             ("train", self.train_data),
             ("validate", self.validate_data),
@@ -427,12 +535,9 @@ class ANLIAugmentDataset(ANLIBaseDataset):
             encoded_sentence = self.tokenizer(
                 [", ".join(self.get_augment_context(split, data["id"]))]
                 * len(data["choices"]),
-                [
-                    self.normalize_question(data["text_question"])
-                    + " Hypothesis: "
-                    + ch
-                    for ch in data["choices"]
-                ],
+                [data["text_question"] + " " + ch for ch in data["choices"]],
+                # [data["text_question"]] * len(data["choices"]),
+                # data["choices"],
                 truncation="only_first",
                 padding="max_length",
                 max_length=self.max_seq_length,
@@ -442,12 +547,6 @@ class ANLIAugmentDataset(ANLIBaseDataset):
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
         return data
-
-    def normalize_question(self, question):
-        if question.endswith("?") or question.endswith("."):
-            return question.capitalize()
-        else:
-            return (question + ".").capitalize()
 
     def get_augment_context(self, split, data_id, no_rand=False):
         if split != "train":

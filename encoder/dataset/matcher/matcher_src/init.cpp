@@ -129,6 +129,7 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("find_target") = false,
                  py::arg("max_depth_for_each_node") = 3,
+                 py::arg("min_levels_before_checking_target_reached") = 0,
                  py::arg("split_node_minimum_edge_num") = 20,
                  py::arg("split_node_minimum_similarity") = 0.35)
             .def("find_available_choices", &KnowledgeMatcher::findAvailableChoices,

@@ -3,32 +3,32 @@ import json
 import torch as t
 from torch.utils.data import DataLoader, RandomSampler
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
-from encoder.dataset.anli import (
-    ANLIBaseDataset,
-    ANLIAugmentDataset,
+from encoder.dataset.social_iqa import (
+    SocialIQABaseDataset,
+    SocialIQAAugmentDataset,
 )
 from encoder.dataset.sample import TrainPathGenerator
 from encoder.utils.file import PickleCache, JSONCache
-from encoder.utils.config import ANLIAugmentTrainConfig
+from encoder.utils.config import SocialIQAAugmentTrainConfig
 from encoder.utils.settings import preprocess_cache_dir
 from .augment_base_trainer import AugmentBaseTrainer
 from .utils import set_worker_sharing_strategy
 
 
-class ANLIAugmentTrainer(AugmentBaseTrainer):
+class SocialIQAAugmentTrainer(AugmentBaseTrainer):
     def __init__(
         self,
-        config: ANLIAugmentTrainConfig,
+        config: SocialIQAAugmentTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
         super().__init__(
-            2,
+            3,
             config=config,
             stage_result_path=stage_result_path,
             is_distributed=is_distributed,
         )
-        self.dataset = ANLIAugmentDataset(
+        self.dataset = SocialIQAAugmentDataset(
             tokenizer=self.tokenizer,
             augment_contexts=self.load_augment_contexts(),
             max_seq_length=config.max_seq_length,
@@ -44,7 +44,7 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
 
     @property
     def monitor(self):
-        return "accuracy"
+        return "val_accuracy"
 
     @property
     def monitor_mode(self):
@@ -64,27 +64,16 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
         )
 
     def val_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.validate_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        return [
+            DataLoader(dataset=self.dataset.validate_dataset, **self.dataloader_args,),
+            DataLoader(dataset=self.dataset.test_ref_dataset, **self.dataloader_args,),
+        ]
 
     def test_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.test_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        return DataLoader(dataset=self.dataset.test_dataset, **self.dataloader_args,)
 
     def load_augment_contexts(self):
-        dataset = ANLIBaseDataset(tokenizer=None)
+        dataset = SocialIQABaseDataset(tokenizer=None)
 
         if self.config.augment_method not in (
             "raw_decode",
@@ -97,11 +86,12 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
         def flatten_sublists(list):
             return [x for sub_list in list for x in sub_list]
 
+        contexts = {}
         with open(
-            os.path.join(preprocess_cache_dir, f"anli_sample_result_mc.json",), "r",
+            os.path.join(preprocess_cache_dir, f"social_iqa_sample_result_mc.json",),
+            "r",
         ) as file:
             raw_contexts = json.load(file)
-            contexts = {}
             for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
                 if self.config.augment_method == "raw_decode":
                     pass
@@ -119,13 +109,15 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
                             for x, y in zip(raw_path_edges, raw_paths)
                         ]
 
-                paths = [", ".join(path) + " # " for path in raw_paths]
+                paths = [", ".join(path) + " # " for path in raw_paths][:1]
                 contexts[id] = list(dict.fromkeys(paths))
 
         # authoritative train context
         train_contexts = {}
         with JSONCache(
-            os.path.join(preprocess_cache_dir, f"anli_sample_train_result_mc.json",),
+            os.path.join(
+                preprocess_cache_dir, f"social_iqa_sample_train_result_mc.json",
+            ),
             generate_func=self.generate_train_paths,
         ) as cache:
             print(f"Loaded {len(contexts)} contexts")
@@ -141,7 +133,7 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
                         prioritize_original_annotation=True,
                     )
                 train_contexts[id] = [
-                    ", ".join([xx for x in raw_paths for xx in x]) + " # "
+                    ", ".join([xx for x in raw_paths[:1] for xx in x]) + " # "
                 ]
             else:
                 train_contexts[id] = []
@@ -149,16 +141,10 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
         return contexts, train_contexts
 
     def generate_train_paths(self):
-        dataset = ANLIBaseDataset(tokenizer=None)
+        dataset = SocialIQABaseDataset(tokenizer=None)
         generator = TrainPathGenerator(
             [
-                (
-                    d["id"],
-                    d["text_question"],
-                    # d["text_answer"],
-                    d["diff_choices"][d["label"]],
-                    d["facts"],
-                )
+                (d["id"], d["context"], d["text_answer"], d["facts"],)
                 for d in dataset.train_data
             ],
             dataset.matcher,

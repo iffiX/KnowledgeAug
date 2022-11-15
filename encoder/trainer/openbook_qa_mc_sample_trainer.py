@@ -58,6 +58,7 @@ class OpenBookQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 (
                     d["id"],
                     d["text_question"],
+                    d["text_answer"],
                     ", ".join(d["choices"]),
                     d["original_facts"],
                 )
@@ -217,7 +218,7 @@ class OpenBookQAMultipleChoiceSampleTrainer(pl.LightningModule):
                     self.dataset.test_data,
                 ),
             ):
-                total, fact_retrieval_count, correct_choice_count = 0, 0, 0
+                total, fact_retrieval_count = 0, 0
                 for data in split:
                     if data["id"] in result:
                         total += 1
@@ -234,16 +235,9 @@ class OpenBookQAMultipleChoiceSampleTrainer(pl.LightningModule):
                         if best_length == 0:
                             print(data["id"])
                         fact_retrieval_count += best_length
-                        correct_choice_count += (
-                            1 if data["text_answer"] in result[data["id"]][2] else 0
-                        )
                 print(
                     f"Average retrieval length of {split_name}: "
                     f"{fact_retrieval_count / total}"
-                )
-                print(
-                    f"Choice accuracy of {split_name}: "
-                    f"{correct_choice_count / total}"
                 )
 
     def configure_optimizers(self):

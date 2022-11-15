@@ -32,6 +32,8 @@ class BaseMatcher:
         "being",
         "was",
         "were",
+        "get",
+        "got",
     }
     NATURAL_TEMPLATES = {
         "Antonym": "{0} is an antonym of {1}",
@@ -190,6 +192,7 @@ class BaseMatcher:
         target_mask: str = "",
         find_target: bool = False,
         max_depth_for_each_node: int = 3,
+        min_levels_before_checking_target_reached: int = 0,
         split_node_minimum_edge_num: int = 20,
         split_node_minimum_similarity: float = 0.35,
     ) -> Tuple[List[List[str]], List[List[Edge]], List[List[int]]]:
@@ -219,6 +222,7 @@ class BaseMatcher:
             target_mask=_target_mask,
             find_target=find_target,
             max_depth_for_each_node=max_depth_for_each_node,
+            min_levels_before_checking_target_reached=min_levels_before_checking_target_reached,
             split_node_minimum_edge_num=split_node_minimum_edge_num,
             split_node_minimum_similarity=split_node_minimum_similarity,
         )

@@ -2,16 +2,16 @@ import re
 import os
 import logging
 from tqdm import tqdm
-from typing import List
+from typing import List, Dict
 from transformers import PreTrainedTokenizerBase
-from encoder.dataset.download import ConceptNet, ANLI, ATOMIC2020
+from encoder.dataset.download import ConceptNet, SocialIQA, ATOMIC2020
 from encoder.dataset.matcher import ConceptNetReader, KnowledgeMatcher
 from encoder.dataset.matcher.base import BaseMatcher
 from encoder.utils.file import PickleCache, JSONCache
 from encoder.utils.settings import preprocess_cache_dir, dataset_cache_dir
 
 
-class ANLIMatcher(BaseMatcher):
+class SocialIQAMatcher(BaseMatcher):
     ATOMIC_RELATION_TRANSLATION = {
         "AtLocation": "located at",
         "CapableOf": "is capable of",
@@ -36,18 +36,18 @@ class ANLIMatcher(BaseMatcher):
         "NotDesires": "does not desire",
         "ObjectUse": "used for",
         "UsedFor": "used for",
-        "oEffect": "as a result, Y or others will",
-        "oReact": "as a result, Y or others feels",
-        "oWant": "as a result, Y or others want",
+        "oEffect": "as a result Y or others will",
+        "oReact": "as a result Y or others feels",
+        "oWant": "as a result Y or others want",
         "PartOf": "is a part of",
         "ReceivesAction": "can receive action",
         "xAttr": "X is seen as",
-        "xEffect": "as a result, PersonX will",
+        "xEffect": "as a result PersonX will",
         "xIntent": "because PersonX wanted",
-        "xNeed": "but before, PersonX needed",
-        "xReact": "as a result, PersonX feels",
+        "xNeed": "but before PersonX needed",
+        "xReact": "as a result PersonX feels",
         "xReason": "because",
-        "xWant": "as a result, PersonX wants",
+        "xWant": "as a result PersonX wants",
     }
 
     def __init__(
@@ -60,7 +60,7 @@ class ANLIMatcher(BaseMatcher):
             os.path.join(preprocess_cache_dir, "conceptnet-embedding-glove.hdf5")
         )
         self.concept_net = ConceptNet().require()
-        self.anli = ANLI().require()
+        self.social_iqa = SocialIQA().require()
         self.atomic = ATOMIC2020().require()
 
         if not os.path.exists(archive_path):
@@ -91,32 +91,56 @@ class ANLIMatcher(BaseMatcher):
         else:
             matcher = KnowledgeMatcher(archive_path)
 
-        super(ANLIMatcher, self).__init__(tokenizer, matcher, archive_path)
+        super(SocialIQAMatcher, self).__init__(tokenizer, matcher, archive_path)
         self.matcher.kb.disable_edges_with_weight_below(1)
-        self.matcher.kb.disable_edges_of_relationships(["HasContext", "RelatedTo"])
+        # self.matcher.kb.disable_edges_of_relationships(["HasContext", "RelatedTo"])
+        self.matcher.kb.disable_edges_of_relationships(["HasContext"])
 
-    def add_atomic_knowledge(self, added_knowledge, mask):
+        self.allowed_composite_nodes = {}
+        self.fact_to_composite_node = {}
+        self.composite_node_to_fact = {}
+
+    def add_atomic_knowledge(
+        self,
+        question_allowed_knowledge: Dict[str, List[str]],
+        selected_knowledge: List[str],
+        mask: List[str],
+    ):
         logging.info("Adding ATOMIC2020 knowledge")
 
         def generate():
             tokens = [
                 (knowledge, token_ids, token_mask)
                 for knowledge, (token_ids, token_mask) in zip(
-                    added_knowledge,
-                    self.parallel_tokenize_and_mask(added_knowledge, mask),
+                    selected_knowledge,
+                    self.parallel_tokenize_and_mask(selected_knowledge, mask),
                 )
             ]
-            return len(added_knowledge), tokens
+            return len(selected_knowledge), tokens
 
         with PickleCache(
-            os.path.join(preprocess_cache_dir, "anli_matcher_atomic_knowledge.data"),
+            os.path.join(
+                preprocess_cache_dir, "social_iqa_matcher_atomic_knowledge.data"
+            ),
             generate,
         ) as cache:
             hash_value, tokens = cache.data
             for knowledge, token_ids, token_mask in tqdm(tokens):
-                self.matcher.kb.add_composite_node(
+                self.fact_to_composite_node[
+                    knowledge
+                ] = self.matcher.kb.add_composite_node(
                     knowledge, "RelatedTo", token_ids, token_mask
                 )
+
+            for (
+                question_id,
+                question_allowed_knowledge,
+            ) in question_allowed_knowledge.items():
+                self.allowed_composite_nodes[question_id] = [
+                    self.fact_to_composite_node[f] for f in question_allowed_knowledge
+                ]
+            for fact, node in self.fact_to_composite_node.items():
+                self.composite_node_to_fact[node] = fact
             logging.info(f"Added {len(tokens)} composite nodes")
 
     def get_atomic_knowledge_text_and_mask(self):
@@ -141,6 +165,7 @@ class ANLIMatcher(BaseMatcher):
                         if len(segments) != 3 or segments[-1] == "none":
                             invalid_num += 1
                             continue
+
                         raw_knowledge.append(segments)
 
             # Check whether there exists a same edge in ConceptNet
@@ -190,12 +215,14 @@ class ANLIMatcher(BaseMatcher):
                 if e[0] == -1:
                     knowledge.append(
                         "{} {} {}".format(
-                            k[0], self.ATOMIC_RELATION_TRANSLATION[k[1]], k[2]
-                        )
+                            k[0].replace("___", "Z"),
+                            self.ATOMIC_RELATION_TRANSLATION[k[1]],
+                            k[2],
+                        ).lower()
                     )
                     mask.append(
                         "{}-{}-{}".format(
-                            mask_atomic_stopwords(k[0]),
+                            mask_atomic_stopwords(k[0].replace("___", "Z")),
                             "-" * len(self.ATOMIC_RELATION_TRANSLATION[k[1]]),
                             mask_atomic_stopwords(k[2]),
                         )
@@ -208,13 +235,15 @@ class ANLIMatcher(BaseMatcher):
             return knowledge, mask
 
         with JSONCache(
-            os.path.join(preprocess_cache_dir, "anli_matcher_filtered_corpus.json"),
+            os.path.join(
+                preprocess_cache_dir, "social_iqa_matcher_filtered_corpus.json"
+            ),
             generate,
         ) as cache:
             return cache.data
 
     def __reduce__(self):
         return (
-            ANLIMatcher,
+            SocialIQAMatcher,
             (self.tokenizer,),
         )

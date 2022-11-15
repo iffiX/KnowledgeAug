@@ -206,10 +206,11 @@ class AugmentBaseTrainer(pl.LightningModule):
         _, result = collate_and_filter_outputs(
             outputs, [d["id"] for d in self.dataset.test_data]
         )
-        if "t5-" in self.config.base_type:
-            self.dataset.generate_test_result_tokens(result, self.stage_result_path)
-        else:
-            self.dataset.generate_test_result_logits(result, self.stage_result_path)
+        if not self.is_distributed or get_rank() == 0:
+            if "t5-" in self.config.base_type:
+                self.dataset.generate_test_result_tokens(result, self.stage_result_path)
+            else:
+                self.dataset.generate_test_result_logits(result, self.stage_result_path)
 
     def configure_optimizers(self):
         if self.config.optimizer_class == "Adafactor":

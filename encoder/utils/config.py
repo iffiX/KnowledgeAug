@@ -248,11 +248,58 @@ class CommonsenseQA2AugmentTrainConfig(AugmentBaseConfig):
     load_prefetch_per_worker: Optional[int] = 2
 
 
+class ANLIMultipleChoiceSampleTrainConfig(SampleBaseConfig):
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+    max_steps: int = 3
+    max_depth: int = 2
+    beam_size: int = 5
+    return_beam_num: int = 5
+    min_logits: Union[float, None] = None
+    max_inference_num: int = 20000
+    inference_batch_size: int = 128
+    state_delimeter: str = ", "
+    end_of_reasoning: str = "END_OF_REASONING"
+    negative_samples: int = 3
+    negative_shuffle_seed: int = 42
+
+
 class ANLIAugmentTrainConfig(AugmentBaseConfig):
     max_seq_length: int = 256
     generate_length: int = 20
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
+
+    max_depth: int = 2
+    augment_method: str = "raw_decode"
+
+
+class SocialIQAMultipleChoiceSampleTrainConfig(SampleBaseConfig):
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+    max_steps: int = 3
+    max_depth: int = 2
+    beam_size: int = 5
+    return_beam_num: int = 5
+    min_logits: Union[float, None] = None
+    max_inference_num: int = 20000
+    inference_batch_size: int = 128
+    state_delimeter: str = ", "
+    end_of_reasoning: str = "END_OF_REASONING"
+    negative_samples: int = 3
+    negative_shuffle_seed: int = 42
+
+
+class SocialIQAAugmentTrainConfig(AugmentBaseConfig):
+    max_seq_length: int = 256
+    generate_length: int = 20
+    load_worker_num: Optional[int] = 0
+    load_prefetch_per_worker: Optional[int] = 2
+
+    max_depth: int = 2
+    augment_method: str = "raw_decode"
 
 
 class EnsembleTrainConfig(BaseModel):
@@ -313,7 +360,10 @@ class Config(BaseModel):
 
 def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
+        "anli_mc_sample": ANLIMultipleChoiceSampleTrainConfig,
         "anli_augment": ANLIAugmentTrainConfig,
+        "social_iqa_mc_sample": SocialIQAMultipleChoiceSampleTrainConfig,
+        "social_iqa_augment": SocialIQAAugmentTrainConfig,
         "commonsense_qa": CommonsenseQATrainConfig,
         "commonsense_qa_sample": CommonsenseQASampleTrainConfig,
         "commonsense_qa_augment": CommonsenseQAAugmentTrainConfig,

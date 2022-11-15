@@ -158,7 +158,7 @@ class RewardPredictorSingleChoiceDatasetCreator:
                     ]
                     visited_nodes = list(set(visited_nodes))
 
-            # target nodes is just a placeholder here
+            # target nodes is just a placeholder here, the value doesn't matter
             (
                 list_of_neg_annotations_for_wrong_choices,
                 _,
@@ -292,7 +292,10 @@ class RewardPredictorSingleChoiceDataset(Dataset):
         """
         Args:
             name: Dataset name, used to differ cache from one another.
-            data: A list of tuples of id, question, answer, choices and facts.
+            data: A list of tuples, each one contain:
+                (id, question, correct choice, all choices, intermediate nodes, optional(choice masks)),
+                intermediate nodes are string names of nodes that the path must go through.
+                choice masks are used to exclude unnecessary regions in the choice, eg: stop words etc.
         """
         self.name = name
         self.data = data
@@ -425,8 +428,8 @@ class RewardPredictorMultipleChoiceDatasetCreator:
     def __init__(
         self,
         data: Union[
-            List[Tuple[str, str, str, List[str]]],
-            List[Tuple[str, str, str, List[str], str]],
+            List[Tuple[str, str, str, str, List[str]]],
+            List[Tuple[str, str, str, str, List[str], str, str]],
         ],
         matcher: BaseMatcher,
         max_depth: int = 2,
@@ -450,7 +453,10 @@ class RewardPredictorMultipleChoiceDatasetCreator:
             Question + (Optional, Context) + All Choices + some_path A->B->C [SEP] end_of_reasoning [SEP]
 
         Args:
-            data: id, question, all choices, intermediate nodes, optional(choice mask of all choices),
+            data: id, question, correct choice, all choices, intermediate nodes,
+                  optional(choice mask of the correct choice)
+                  optional(choice mask of all choices),
+
                 intermediate nodes are string names of nodes that the path must go through.
                 choice masks are used to exclude unnecessary regions in the choice, eg: stop words etc.
             max_depth: Max depth to search for each step (the length of each sub path).
@@ -482,28 +488,30 @@ class RewardPredictorMultipleChoiceDatasetCreator:
                 if "Context:" not in self.data[data_idx][1]
                 else self.data[data_idx][1][: self.data[data_idx][1].find("Context:")]
             )
-            target_mask = (
-                self.data[data_idx][4] if len(self.data[data_idx]) == 5 else ""
+
+            correct_choice_mask, target_mask = (
+                (self.data[data_idx][5], self.data[data_idx][6])
+                if len(self.data[data_idx]) == 7
+                else ("", "")
             )
             result = self.matcher.find_shortest_path(
                 source_sentence=source_sentence,
                 target_sentence=self.data[data_idx][2],
-                target_mask=target_mask,
-                intermediate_nodes=self.data[data_idx][3],
+                target_mask=correct_choice_mask,
+                intermediate_nodes=self.data[data_idx][4],
                 find_target=True,
                 max_depth_for_each_node=self.max_depth,
             )
             start_nodes, target_nodes = self.matcher.match_source_and_target_nodes(
-                source_sentence, self.data[data_idx][2], target_mask=target_mask,
+                source_sentence, self.data[data_idx][3], target_mask=target_mask,
             )
             transitions = []
-            # path for correct choice
             if len(result[0]) > 0:
                 state = (
                     "Question: "
                     + self.data[data_idx][1]
                     + " Choice: "
-                    + self.data[data_idx][2]
+                    + self.data[data_idx][3]
                     + " Explain: "
                 )
 
@@ -636,8 +644,8 @@ class RewardPredictorMultipleChoiceDataset(Dataset):
         self,
         name: str,
         data: Union[
-            List[Tuple[str, str, str, List[str]]],
-            List[Tuple[str, str, str, List[str], str]],
+            List[Tuple[str, str, str, str, List[str]]],
+            List[Tuple[str, str, str, str, List[str], str, str]],
         ],
         matcher: BaseMatcher,
         limit_size: int = None,
@@ -652,10 +660,12 @@ class RewardPredictorMultipleChoiceDataset(Dataset):
         """
         Args:
             name: Dataset name, used to differ cache from one another.
-            data: A list of tuples, each one contain:
-                (id, question, all choices, intermediate nodes, optional(all choices mask)),
+            data: id, question, correct choice, all choices, intermediate nodes,
+                  optional(choice mask of the correct choice)
+                  optional(choice mask of all choices),
+
                 intermediate nodes are string names of nodes that the path must go through.
-                all choices mask is used to exclude unnecessary regions in all choices, eg: stop words etc.
+                choice masks are used to exclude unnecessary regions in the choice, eg: stop words etc.
         """
         self.name = name
         self.data = data
@@ -783,10 +793,12 @@ class TrainPathCreator:
         data: List[Tuple[str, str, str, List[str]]],
         matcher: BaseMatcher,
         max_depth: int = 2,
+        min_steps: int = 0,
     ):
         self.data = data
         self.matcher = matcher
         self.max_depth = max_depth
+        self.min_steps = min_steps
 
     @staticmethod
     def get_train_path_for_sample(idx):
@@ -797,12 +809,15 @@ class TrainPathCreator:
             intermediate_nodes=self.data[idx][3],
             find_target=True,
             max_depth_for_each_node=self.max_depth,
+            min_levels_before_checking_target_reached=self.min_steps,
         )
         return self.data[idx][0], (result[0], result[1])
 
     @staticmethod
-    def initialize_pool(data, matcher, max_depth):
-        TrainPathCreator.instance = TrainPathCreator(data, matcher, max_depth)
+    def initialize_pool(data, matcher, max_depth, min_levels):
+        TrainPathCreator.instance = TrainPathCreator(
+            data, matcher, max_depth, min_levels
+        )
 
 
 class TrainPathGenerator:
@@ -811,15 +826,25 @@ class TrainPathGenerator:
         data: List[Tuple[str, str, str, List[str]]],
         matcher: BaseMatcher,
         max_depth: int = 2,
+        min_steps: int = 0,
     ):
-        self.data, self.matcher, self.max_depth = data, matcher, max_depth
+        """
+        Args:
+            data: id, question, answer, list of intermediate facts
+        """
+        self.data, self.matcher, self.max_depth, self.min_steps = (
+            data,
+            matcher,
+            max_depth,
+            min_steps,
+        )
         self.paths = self.generate_train_paths()
 
     def generate_train_paths(self):
         result = {}
         with mp.Pool(
             initializer=TrainPathCreator.initialize_pool,
-            initargs=(self.data, self.matcher, self.max_depth),
+            initargs=(self.data, self.matcher, self.max_depth, self.min_steps),
         ) as pool, tqdm.tqdm(total=len(self.data)) as pbar:
             for (_id, transitions) in pool.imap_unordered(
                 TrainPathCreator.get_train_path_for_sample, range(len(self.data)),
@@ -1058,7 +1083,8 @@ class RewardPredictorSingleChoiceBestFirstBeamSearchDataset(Dataset):
                             # If it is the last level, only keep the annotation with the highest score
                             # since these are just different but similar annotations leading to the
                             # same choice (a path for target nodes only)
-                            if length < self.max_steps - 1:
+                            # This only applies to the case where there are intermediate nodes
+                            if length < self.max_steps - 1 or self.max_steps == 1:
                                 optimal_annotations = set(highest_scores.values())
                             else:
                                 optimal_annotations = {int(t.argmax(log_prob, dim=0))}
@@ -1633,7 +1659,8 @@ class RewardPredictorMultipleChoiceBestFirstBeamSearchDataset(Dataset):
                         # If it is the last level, only keep the annotation with the highest score
                         # since these are just different but similar annotations leading to the
                         # same choice (a path for target nodes only)
-                        if length < self.max_steps - 1:
+                        # This only applies to the case where there are intermediate nodes
+                        if length < self.max_steps - 1 or self.max_steps == 1:
                             optimal_annotations = set(highest_scores.values())
                         else:
                             optimal_annotations = {int(t.argmax(log_prob, dim=0))}

@@ -5,6 +5,9 @@ import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
 from .anli_augment_trainer import ANLIAugmentTrainer
+from .anli_sample_trainer import ANLIMultipleChoiceSampleTrainer
+from .social_iqa_augment_trainer import SocialIQAAugmentTrainer
+from .social_iqa_sample_trainer import SocialIQAMultipleChoiceSampleTrainer
 from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
 from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
@@ -22,7 +25,10 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
+    "anli_mc_sample": ANLIMultipleChoiceSampleTrainer,
     "anli_augment": ANLIAugmentTrainer,
+    "social_iqa_mc_sample": SocialIQAMultipleChoiceSampleTrainer,
+    "social_iqa_augment": SocialIQAAugmentTrainer,
     "commonsense_qa_sample": CommonsenseQASampleTrainer,
     "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,

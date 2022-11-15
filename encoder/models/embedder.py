@@ -1,5 +1,6 @@
 import torch as t
 import torch.nn.functional as F
+from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 from encoder.utils.settings import (
     model_cache_dir,
@@ -37,10 +38,16 @@ class Embedder:
             local_files_only=local_files_only,
         )
 
-    def embed(self, inputs, max_length=256, batch_size=256):
+    def embed(self, inputs, max_length=256, batch_size=256, show_prog_bar=False):
         with t.no_grad():
             result = []
+            if show_prog_bar:
+                prog_bar = tqdm(total=len(inputs))
+            else:
+                prog_bar = None
             for start in range(0, len(inputs), batch_size):
+                if show_prog_bar:
+                    prog_bar.update(min(batch_size, len(inputs) - start))
                 batch = self.tokenizer(
                     inputs[start : start + batch_size],
                     padding="longest",
