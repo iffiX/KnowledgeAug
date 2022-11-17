@@ -1,4 +1,5 @@
 import os
+import re
 import copy
 import json
 import nltk
@@ -90,6 +91,8 @@ class SocialIQABaseDataset:
             self.matcher.add_atomic_knowledge(
                 question_allowed_knowledge, select_knowledge, mask
             )
+        self.question_allowed_knowledge = question_allowed_knowledge
+
         with PickleCache(
             os.path.join(preprocess_cache_dir, "social_iqa_selected_facts.data"),
             self.select_facts,
@@ -97,9 +100,46 @@ class SocialIQABaseDataset:
             question_facts = cache.data
             # Select the most similar one as the intermediate fact
             for data in chain(self.train_data, self.validate_data):
+                if not question_allowed_knowledge[data["id"]]:
+                    question_facts[data["id"]] = []
+            for data in chain(self.train_data, self.validate_data):
                 data["facts"] = question_facts[data["id"]]
 
+        self.validate_answer_retreival(
+            self.train_data, question_facts, question_allowed_knowledge
+        )
+        self.validate_answer_retreival(
+            self.validate_data, question_facts, question_allowed_knowledge
+        )
         self.set_corpus()
+
+    def validate_answer_retreival(self, data, facts, allowed_knowledge):
+        from pprint import pprint
+
+        fact_retrieval_count = 0
+        allowed_retrieval_count = 0
+        has_fact_count = 0
+        has_allowed_count = 0
+        for d in data:
+            words = d["choice_diffs"][d["label"]]
+            if facts[d["id"]]:
+                fact = facts[d["id"]][0]
+                has_fact_count += 1
+                if any(word in fact for word in words):
+                    fact_retrieval_count += 1
+                # else:
+                #     pprint(d)
+            if allowed_knowledge[d["id"]]:
+                allowed = allowed_knowledge[d["id"]]
+                has_allowed_count += 1
+                for f in allowed:
+                    if any(word in f for word in words):
+                        allowed_retrieval_count += 1
+                        break
+        print(f"fact rate: {fact_retrieval_count / has_fact_count}")
+        print(f"allowed_rate: {allowed_retrieval_count/has_allowed_count}")
+        print(f"fact count: {has_fact_count}")
+        print(f"allowed count: {has_allowed_count}")
 
     @property
     def train_dataset(self):
@@ -294,11 +334,13 @@ class SocialIQABaseDataset:
             )
 
             choices = [entry["answerA"], entry["answerB"], entry["answerC"]]
+            masks, diff_parts = self.generate_choice_match_mask(choices)
             preprocessed = {
                 "text_question": entry["context"] + " " + entry["question"],
                 "text_choices": text_choices,
                 "choices": choices,
-                "choice_masks": self.generate_choice_match_mask(choices),
+                "choice_masks": masks,
+                "choice_diffs": diff_parts,
                 "context": entry["context"],
                 "question": entry["question"],
                 "id": split + "|" + str(idx),
@@ -351,7 +393,7 @@ class SocialIQABaseDataset:
                         start += len(word)
                     else:
                         break
-        return ["".join(mask) for mask in masks]
+        return ["".join(mask) for mask in masks], different_words
 
     def generate_choice_str(self, choices: List[str]):
         result = ""
@@ -368,17 +410,16 @@ class SocialIQABaseDataset:
 
     def select_facts(self):
         contexts = []
+        questions = []
         choices = []
         query_ids = []
         for data in chain(self.train_data, self.validate_data):
             contexts.append(data["context"])
+            questions.append(data["question"])
             choices.append(data["text_answer"])
             query_ids.append(data["id"])
-        texts, _ = self.matcher.get_atomic_knowledge_text_and_mask()
 
-        selected_facts = self.find_relative_knowledge_by_choice(
-            contexts, choices, texts
-        )
+        selected_facts = self.find_related_knowledge(contexts, questions, choices)
 
         return {
             id_: [allowed_facts[0]] if allowed_facts else []
@@ -387,81 +428,119 @@ class SocialIQABaseDataset:
 
     def select_knowledge(self):
         contexts = []
+        questions = []
         choices = []
         query_ids = []
         for data in chain(self.train_data, self.validate_data, self.test_data):
             for choice in data["choices"]:
                 contexts.append(data["context"])
+                questions.append(data["question"])
                 choices.append(choice)
                 query_ids.append(data["id"])
-        texts, masks = self.matcher.get_atomic_knowledge_text_and_mask()
+        texts, masks, _ = self.matcher.get_atomic_knowledge_text_and_mask()
         text_to_index = {t: idx for idx, t in enumerate(texts)}
 
-        selected_facts = self.find_relative_knowledge_by_choice(
-            contexts, choices, texts
-        )
+        selected_facts = self.find_related_knowledge(contexts, questions, choices)
 
         all_selected_facts = sorted(
             list(set([f for facts in selected_facts for f in facts]))
         )
         all_selected_facts_mask = [masks[text_to_index[f]] for f in all_selected_facts]
         allowed_facts = {}
+        choice_with_allowed_facts_count = {}
         for id_, query_allowed_facts in zip(query_ids, selected_facts):
             if id_ not in allowed_facts:
-                allowed_facts[id_] = query_allowed_facts
+                allowed_facts[id_] = query_allowed_facts[:2]
+                choice_with_allowed_facts_count[id_] = 1 if query_allowed_facts else 0
             else:
-                allowed_facts[id_] += query_allowed_facts
+                allowed_facts[id_] += query_allowed_facts[:2]
+                choice_with_allowed_facts_count[id_] += 1 if query_allowed_facts else 0
+        for id_, count in choice_with_allowed_facts_count.items():
+            if count < 2:
+                allowed_facts[id_] = []
         return (
             allowed_facts,
             all_selected_facts,
             all_selected_facts_mask,
         )
 
-    def find_relative_knowledge_by_choice(self, contexts, choices, texts):
+    def find_related_knowledge(self, contexts, questions, choices):
         embedder = Embedder("cuda:0")
-        fact_selector = FactSelector(
-            [ctx + " " + ch for ctx, ch in zip(contexts, choices)],
-            texts,
-            min_score=0.4,
-            max_facts=100,
-        )
-        all_selected_facts = []
+        (
+            knowledge,
+            mask,
+            relation_to_triple,
+        ) = self.matcher.get_atomic_knowledge_text_and_mask()
+
+        def generate_atomic_knowledge_embedding():
+            triple_embedding = {}
+            print("Computing embeddings for atomic knowledge")
+            for relation, triples in relation_to_triple.items():
+                print(f"Processing relation {relation}")
+                triple_embedding[relation] = (
+                    embedder.embed([t[0] for t in triples], show_prog_bar=True),
+                    embedder.embed([t[1] for t in triples], show_prog_bar=True),
+                    [t[2] for t in triples],
+                )
+            return triple_embedding
+
+        with PickleCache(
+            os.path.join(preprocess_cache_dir, "social_iqa_atomic_embedding.data"),
+            generate_atomic_knowledge_embedding,
+        ) as cache:
+            triple_embedding = cache.data
+
         print("Computing embeddings for contexts")
-        all_context_embeddings = embedder.embed(choices, show_prog_bar=True)
-        print("Computing embeddings for first level facts")
-        raw_selected_facts = sorted(
-            list(set([f for sf in fact_selector.selected_facts for f in sf]))
-        )
-        raw_selected_facts_idx = {f: idx for idx, f in enumerate(raw_selected_facts)}
-        raw_selected_facts_embeddings = embedder.embed(
-            raw_selected_facts, show_prog_bar=True
-        )
-        for idx, (context, selected_facts) in tqdm(
-            enumerate(zip(contexts, fact_selector.selected_facts)), total=len(contexts)
+        context_embeddings = embedder.embed(contexts, show_prog_bar=True)
+        print("Computing embeddings for choices")
+        choice_embeddings = embedder.embed(choices, show_prog_bar=True)
+
+        selected_facts = []
+        for context_embedding, question, choice_embedding in tqdm(
+            zip(context_embeddings, questions, choice_embeddings), total=len(contexts)
         ):
-            if len(selected_facts) == 0:
-                all_selected_facts.append([])
+            question = question.lower()
+            if re.search("others feel", question):
+                question_type = "oReact"
+            elif re.search("others want", question):
+                question_type = "oWant"
+            elif re.search("happen to others", question):
+                question_type = "oEffect"
+            elif re.search("feel", question):
+                question_type = "xReact"
+            elif re.search("want to do", question):
+                question_type = "xWant"
+            elif re.search("happen to", question):
+                question_type = "xEffect"
+            elif re.search("describe", question):
+                question_type = "xAttr"
+            elif re.search("need to do", question):
+                question_type = "xNeed"
+            elif re.search("why did", question):
+                question_type = "xIntent"
             else:
-                context_embedding = all_context_embeddings[idx : idx + 1]
-                fact_embeddings = t.cat(
-                    [
-                        raw_selected_facts_embeddings[
-                            raw_selected_facts_idx[f] : raw_selected_facts_idx[f] + 1
-                        ]
-                        for f in selected_facts
-                    ],
-                    dim=0,
-                )
-                similarity = t.sum(context_embedding * fact_embeddings, dim=1)
-                all_selected_facts.append(
-                    [
-                        selected_facts[i]
-                        for i in t.topk(
-                            similarity, k=min(10, len(selected_facts))
-                        ).indices
-                    ]
-                )
-        return all_selected_facts
+                selected_facts.append([])
+                continue
+
+            context_similarities = t.sum(
+                triple_embedding[question_type][0] * context_embedding, dim=1
+            )
+            choice_similarities = t.sum(
+                triple_embedding[question_type][1] * choice_embedding, dim=1
+            )
+            similarities = context_similarities + choice_similarities
+            selected_facts.append(
+                [
+                    triple_embedding[question_type][2][i]
+                    for i in t.topk(
+                        similarities, k=min(10, similarities.shape[0])
+                    ).indices
+                    if context_similarities[i] > 0.25
+                    and choice_similarities[i] > 0.55
+                    and similarities[i] > 0.8
+                ]
+            )
+        return selected_facts
 
 
 class SocialIQAAugmentDataset(SocialIQABaseDataset):
@@ -535,7 +614,15 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             encoded_sentence = self.tokenizer(
                 [", ".join(self.get_augment_context(split, data["id"]))]
                 * len(data["choices"]),
-                [data["text_question"] + " " + ch for ch in data["choices"]],
+                [
+                    "Question: "
+                    + data["text_question"]
+                    + " Choices: "
+                    + ", ".join(data["choices"])
+                    + " Answer: "
+                    + ch
+                    for ch in data["choices"]
+                ],
                 # [data["text_question"]] * len(data["choices"]),
                 # data["choices"],
                 truncation="only_first",
@@ -549,16 +636,18 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
         return data
 
     def get_augment_context(self, split, data_id, no_rand=False):
-        if split != "train":
-            augment_context = self.augment_contexts[0].get(data_id, [])
-        else:
-            if self.rand_train and not no_rand:
-                ref_context = self.augment_contexts[1].get(data_id)
-                augment_context = self.augment_contexts[0].get(data_id, None)
-                if augment_context is not None:
-                    augment_context = self.rand.choice([ref_context, augment_context])
-                else:
-                    augment_context = ref_context
-            else:
-                augment_context = self.augment_contexts[1].get(data_id)
+        # if split != "train":
+        #     augment_context = self.augment_contexts[0].get(data_id, [])
+        # else:
+        #     if self.rand_train and not no_rand:
+        #         ref_context = self.augment_contexts[1].get(data_id)
+        #         augment_context = self.augment_contexts[0].get(data_id, None)
+        #         if augment_context is not None:
+        #             augment_context = self.rand.choice([ref_context, augment_context])
+        #         else:
+        #             augment_context = ref_context
+        #     else:
+        #         augment_context = self.augment_contexts[1].get(data_id)
+        augment_context = self.augment_contexts[0].get(data_id, [])
+        # augment_context = [f + " # " for f in self.question_allowed_knowledge[data_id]]
         return augment_context

@@ -165,12 +165,34 @@ class SocialIQAMatcher(BaseMatcher):
                         if len(segments) != 3 or segments[-1] == "none":
                             invalid_num += 1
                             continue
-
+                        if segments[1] not in (
+                            "xIntent",
+                            "xNeed",
+                            "xAttr",
+                            "xEffect",
+                            "xWant",
+                            "xReact",
+                            "oEffect",
+                            "oWant",
+                            "oReact",
+                        ):
+                            continue
                         raw_knowledge.append(segments)
 
             # Check whether there exists a same edge in ConceptNet
             # some ConceptNet relations are converted in ATOMIC,
             # ignore them
+            relation_to_triple = {
+                "xIntent": [],
+                "xNeed": [],
+                "xAttr": [],
+                "xEffect": [],
+                "xWant": [],
+                "xReact": [],
+                "oEffect": [],
+                "oWant": [],
+                "oReact": [],
+            }
             knowledge = []
             mask = []
 
@@ -227,12 +249,13 @@ class SocialIQAMatcher(BaseMatcher):
                             mask_atomic_stopwords(k[2]),
                         )
                     )
+                    relation_to_triple[k[1]].append((k[0], k[2], knowledge[-1]))
             print(
                 f"Invalid lines: {invalid_num}, duplicate lines: {duplicate_num} "
                 f"conceptnet covered lines: {len(raw_knowledge) - len(knowledge)}, "
                 f"valid lines: {len(knowledge)}"
             )
-            return knowledge, mask
+            return knowledge, mask, relation_to_triple
 
         with JSONCache(
             os.path.join(

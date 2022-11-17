@@ -288,6 +288,7 @@ class SocialIQAMultipleChoiceSampleTrainConfig(SampleBaseConfig):
     inference_batch_size: int = 128
     state_delimeter: str = ", "
     end_of_reasoning: str = "END_OF_REASONING"
+    wrong_choice: str = "WRONG_CHOICE"
     negative_samples: int = 3
     negative_shuffle_seed: int = 42
 
@@ -362,7 +363,7 @@ def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
         "anli_mc_sample": ANLIMultipleChoiceSampleTrainConfig,
         "anli_augment": ANLIAugmentTrainConfig,
-        "social_iqa_mc_sample": SocialIQAMultipleChoiceSampleTrainConfig,
+        "social_iqa_sc_sample": SocialIQAMultipleChoiceSampleTrainConfig,
         "social_iqa_augment": SocialIQAAugmentTrainConfig,
         "commonsense_qa": CommonsenseQATrainConfig,
         "commonsense_qa_sample": CommonsenseQASampleTrainConfig,

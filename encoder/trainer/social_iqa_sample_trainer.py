@@ -20,9 +20,9 @@ from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.social_iqa import SocialIQABaseDataset
 from encoder.dataset.sample import (
-    RewardPredictorMultipleChoiceDataset,
-    RewardPredictorMultipleChoiceDatasetCreatorWithLimitedNodes,
-    RewardPredictorMultipleChoiceBestFirstBeamSearchDatasetWithLimitedNodes,
+    RewardPredictorSingleChoiceDataset,
+    RewardPredictorSingleChoiceDatasetCreatorWithLimitedNodes,
+    RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithLimitedNodes,
 )
 from encoder.utils.config import SocialIQAMultipleChoiceSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
@@ -49,19 +49,19 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
-        self.train_reward_predictor_dataset = RewardPredictorMultipleChoiceDataset(
+        self.train_reward_predictor_dataset = RewardPredictorSingleChoiceDataset(
             f"social_iqa_train",
             [
                 (
                     d["id"],
-                    d["text_question"],
+                    d["context"] + " Context: " + d["question"],
                     d["text_answer"],
-                    ", ".join(d["choices"]),
+                    d["choices"],
                     d["facts"],
-                    d["choice_masks"][d["label"]],
-                    "--".join(d["choice_masks"]),
+                    d["choice_masks"],
                 )
                 for d in getattr(self.dataset, f"train_data")
+                if d["facts"]
             ],
             self.dataset.matcher,
             max_depth=self.config.max_depth,
@@ -71,11 +71,16 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
             else self.config.negative_shuffle_seed + get_rank(),
             state_delimiter=self.config.state_delimeter,
             end_of_reasoning=self.config.end_of_reasoning,
-            creator=RewardPredictorMultipleChoiceDatasetCreatorWithLimitedNodes,
+            creator=RewardPredictorSingleChoiceDatasetCreatorWithLimitedNodes,
         )
         rand = random.Random(42)
         self.validate_indices = rand.choices(
-            list(range(len(self.dataset.validate_data))), k=100
+            [
+                i
+                for i in range(len(self.dataset.validate_data))
+                if self.dataset.validate_data[i]["facts"]
+            ],
+            k=100,
         )
         self.test_result = {}
 
@@ -104,7 +109,7 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
         return self.create_sample_inference_dataloader_for_validate()
 
     def test_dataloader(self):
-        path = os.path.join(preprocess_cache_dir, "social_iqa_sample_result_mc.json")
+        path = os.path.join(preprocess_cache_dir, "social_iqa_sample_result_sc.json")
         if os.path.exists(path):
             with open(path, "r",) as file:
                 self.test_result.update(json.load(file))
@@ -134,21 +139,6 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         _, paths, *__ = batch[0]
         best_length = 0
-        # data = self.dataset.validate_data[self.validate_indices[batch_idx]]
-        # correct_choice_words = data["text_answer"].lower().split(" ")
-        # print(f"Question and context: {data['question']} {data['context']}")
-        # print(f"Answer: {data['text_answer']}")
-        # print(f"Choices: {data['text_choices']}")
-        #
-        # for idx, path in enumerate(paths):
-        #     print(f"Path {idx}: {' '.join(path)}")
-        #
-        # for path in enumerate(paths[:1]):
-        #     if any(word.strip(".") in " ".join(path) for word in correct_choice_words):
-        #         best_length = 1
-        #         break
-
-        best_length = 0
         for path in paths:
             length = 0
             for fact in self.dataset.validate_data[self.validate_indices[batch_idx]][
@@ -161,16 +151,20 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
             if best_length < length:
                 best_length = length
 
-        if best_length == 0:
-            data = self.dataset.validate_data[self.validate_indices[batch_idx]]
-            print(f"Question and context: {data['question']} {data['context']}")
-            print(f"Answer: {data['text_answer']}")
-            print(f"Choices: {data['text_choices']}")
-            print(f"Facts: {data['facts']}")
-            for idx, path in enumerate(paths):
-                print(f"Path {idx}: {' '.join(path)}")
+        if self.dataset.validate_data[self.validate_indices[batch_idx]]["facts"]:
+            should_add = 1
+            if best_length == 0:
+                data = self.dataset.validate_data[self.validate_indices[batch_idx]]
+                print(f"Question and context: {data['question']} {data['context']}")
+                print(f"Answer: {data['text_answer']}")
+                print(f"Choices: {data['text_choices']}")
+                print(f"Facts: {data['facts']}")
+                for idx, path in enumerate(paths):
+                    print(f"Path {idx}: {' '.join(path)}")
+        else:
+            should_add = 0
 
-        return {"idx": batch_idx, "best_length": best_length}
+        return {"idx": batch_idx, "best_length": best_length, "should_add": should_add}
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -190,13 +184,17 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 filtered_outputs.append(o)
                 existing_idx.add(o["idx"])
 
-        average_retrieval = float(np.mean([o["best_length"] for o in filtered_outputs]))
+        total = np.sum([o["should_add"] for o in filtered_outputs])
+        average_retrieval = float(
+            np.sum([o["best_length"] for o in filtered_outputs]) / total
+        )
         self.log(
             f"retrieval", average_retrieval, prog_bar=True, sync_dist=True,
         )
         if not self.is_distributed or get_rank() == 0:
             print(f"Validation result:")
             print(f"retrieval length: {average_retrieval}")
+            print(f"samples with reference facts: {total}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx, _dataloader_id):
         # print(f"Inferenced action num: {batch[0][-1]}")
@@ -229,7 +227,7 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 result[id_] = (paths, path_edges, path_choices)
 
             with open(
-                os.path.join(preprocess_cache_dir, "social_iqa_sample_result_mc.json"),
+                os.path.join(preprocess_cache_dir, "social_iqa_sample_result_sc.json"),
                 "w",
             ) as file:
                 json.dump(result, file, indent=2)
@@ -241,20 +239,7 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 total, fact_retrieval_count = 0, 0
                 for data in split:
                     if data["id"] in result:
-                        total += 1
                         best_length = 0
-
-                        # for path in result[data["id"]][0]:
-                        #     path = " ".join(path)
-                        #     if any(
-                        #         segment.strip(".") in path
-                        #         for segment in data["text_answer"].lower().split(" ")
-                        #         # for segment in data["diff_choices"][
-                        #         #     data["label"]
-                        #         # ].split(" ")
-                        #     ):
-                        #         best_length = 1
-                        #         break
 
                         for path in result[data["id"]][0]:
                             length = 0
@@ -265,10 +250,12 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                                     break
                             if best_length < length:
                                 best_length = length
-                        if best_length == 0:
-                            print(data["id"])
 
-                        fact_retrieval_count += best_length
+                        if data["facts"]:
+                            total += 1
+                            fact_retrieval_count += best_length
+                            if best_length == 0:
+                                print(data["id"])
                 print(
                     f"Average retrieval length of {split_name}: "
                     f"{fact_retrieval_count / total}"
@@ -313,13 +300,13 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
     def create_sample_inference_dataloader_for_validate(self):
         data = self.dataset.validate_data
         return DataLoader(
-            dataset=RewardPredictorMultipleChoiceBestFirstBeamSearchDatasetWithLimitedNodes(
+            dataset=RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithLimitedNodes(
                 [
                     (
                         data[i]["id"],
                         data[i]["context"] + " Context: " + data[i]["question"],
-                        ", ".join(data[i]["choices"]),
-                        "--".join(data[i]["choice_masks"]),
+                        data[i]["choices"],
+                        data[i]["choice_masks"],
                     )
                     for i in self.validate_indices
                 ],
@@ -332,11 +319,13 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
                 max_inference_num=self.config.max_inference_num,
+                expand_choice_num=3,
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
                 parallel=not self.is_distributed,
                 stop_when_reaching_target_nodes=False,
+                prune_low_probability_edges=False,
             ),
             batch_size=1,
             collate_fn=lambda x: x,
@@ -344,15 +333,16 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
 
     def create_sample_inference_dataloader(self, split):
         return DataLoader(
-            dataset=RewardPredictorMultipleChoiceBestFirstBeamSearchDatasetWithLimitedNodes(
+            dataset=RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithLimitedNodes(
                 [
                     (
                         d["id"],
                         d["context"] + " Context: " + d["question"],
-                        ", ".join(d["choices"]),
-                        "--".join(d["choice_masks"]),
+                        d["choices"],
+                        d["choice_masks"],
                     )
                     for d in getattr(self.dataset, f"{split}_data")
+                    if self.dataset.matcher.allowed_composite_nodes[d["id"]]
                 ],
                 self.reward_predictor,
                 self.dataset.matcher,
@@ -363,9 +353,11 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
                 max_inference_num=self.config.max_inference_num,
+                expand_choice_num=3,
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                prune_low_probability_edges=False,
             ),
             batch_size=1,
             collate_fn=lambda x: x,

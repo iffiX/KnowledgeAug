@@ -27,7 +27,7 @@ from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 stage_name_to_trainer_map = {
     "anli_mc_sample": ANLIMultipleChoiceSampleTrainer,
     "anli_augment": ANLIAugmentTrainer,
-    "social_iqa_mc_sample": SocialIQAMultipleChoiceSampleTrainer,
+    "social_iqa_sc_sample": SocialIQAMultipleChoiceSampleTrainer,
     "social_iqa_augment": SocialIQAAugmentTrainer,
     "commonsense_qa_sample": CommonsenseQASampleTrainer,
     "commonsense_qa_augment": CommonsenseQAAugmentTrainer,

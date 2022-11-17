@@ -51,14 +51,14 @@ template<typename T>
 UnorderedPair<T>::UnorderedPair(T value1, T value2) : value1(value1), value2(value2) {}
 
 template<typename T>
-bool UnorderedPair<T>::operator==(const UnorderedPair<T> &other) {
+bool UnorderedPair<T>::operator==(const UnorderedPair<T> &other) const {
     return (value1 == other.value1 && value2 == other.value2) ||
            (value2 == other.value1 && value1 == other.value2);
 }
 
 template<typename T>
 size_t UnorderedPairHash<T>::operator()(const UnorderedPair<T> &pair) const {
-    return hash<T>(pair.value1) ^ hash<T>(pair.value2);
+    return hash<T>()(pair.value1) ^ hash<T>()(pair.value2);
 }
 
 TrieNode::TrieNode(int token, bool isWordEnd) : token(token), isWordEnd(isWordEnd) {}

@@ -258,8 +258,16 @@ class BaseMatcher:
             a composite node, its component nodes are returned.
              A list of next node ids the path is leading to.
             A list of sub list of corresponding edges.
+
+        Note:
+            When allowed_composite_nodes = None, and find_composite = True, return
+            all reachable composite nodes.
+            When allowed_composite_nodes = [], and find_composite = True, return
+            no composite nodes (because no one is allowed).
         """
-        allowed_composite_nodes = allowed_composite_nodes or []
+        provided_empty_composite_nodes = (
+            allowed_composite_nodes is not None and not allowed_composite_nodes
+        )
         (
             list_of_sub_path_annotation_tokens,
             list_of_sub_path_next_nodes,
@@ -269,11 +277,11 @@ class BaseMatcher:
             visited_nodes,
             start_nodes,
             target_nodes,
-            allowed_composite_nodes,
+            allowed_composite_nodes or [],
             max_depth,
             parallel,
             find_target,
-            find_composite,
+            find_composite and not provided_empty_composite_nodes,
             filter_composite_nodes_by_f_beta,
             minimum_f_beta,
         )

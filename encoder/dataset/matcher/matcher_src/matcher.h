@@ -23,7 +23,7 @@ template <typename T>
 class UnorderedPair {
     T value1, value2;
     UnorderedPair(T value1, T value2);
-    bool operator ==(const UnorderedPair &other);
+    bool operator ==(const UnorderedPair &other) const;
 };
 
 template <typename T>

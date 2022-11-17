@@ -22,11 +22,11 @@
             "save": 3
         }
     ],
-    "override_saved_config": {},
+    "override_saved_config": {"0": {"beam_size": 2, "return_beam_num": 2}},
     "early_stopping_patience": 15,
-    "gpus": [0],
+    "gpus": [0, 1],
     "stages": [
-        "social_iqa_mc_sample"
+        "social_iqa_sc_sample"
     ],
-    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_social_iqa_mc_sample"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_social_iqa_sc_sample"
 }

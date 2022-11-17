@@ -88,11 +88,11 @@ class SocialIQAAugmentTrainer(AugmentBaseTrainer):
 
         contexts = {}
         with open(
-            os.path.join(preprocess_cache_dir, f"social_iqa_sample_result_mc.json",),
+            os.path.join(preprocess_cache_dir, f"social_iqa_sample_result_sc.json",),
             "r",
         ) as file:
             raw_contexts = json.load(file)
-            for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
+            for id, (raw_paths, raw_path_edges, answers) in raw_contexts.items():
                 if self.config.augment_method == "raw_decode":
                     pass
                 else:
@@ -109,21 +109,28 @@ class SocialIQAAugmentTrainer(AugmentBaseTrainer):
                             for x, y in zip(raw_path_edges, raw_paths)
                         ]
 
-                paths = [", ".join(path) + " # " for path in raw_paths][:1]
+                paths = []
+                added_answer = set()
+                for path, answer in zip(raw_paths, answers):
+                    if answer not in added_answer:
+                        paths.append(", ".join(path[:1]) + " # ")
+                        added_answer.add(answer)
+                # paths = [", ".join(path[:1]) + " # " for path in raw_paths]
                 contexts[id] = list(dict.fromkeys(paths))
 
         # authoritative train context
         train_contexts = {}
         with JSONCache(
             os.path.join(
-                preprocess_cache_dir, f"social_iqa_sample_train_result_mc.json",
+                preprocess_cache_dir, f"social_iqa_sample_train_result_sc.json",
             ),
             generate_func=self.generate_train_paths,
         ) as cache:
             print(f"Loaded {len(contexts)} contexts")
             data = cache.data
         for id, (raw_paths, raw_path_edges) in data.items():
-            if len(raw_paths) > 0:
+            d = [d for d in dataset.train_data if d["id"] == id][0]
+            if d["facts"] and len(raw_paths) > 0:
                 if self.config.augment_method == "raw_decode":
                     pass
                 else:
