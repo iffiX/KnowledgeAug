@@ -24,15 +24,15 @@ from encoder.dataset.sample import (
     RewardPredictorSingleChoiceDatasetCreatorWithLimitedNodes,
     RewardPredictorSingleChoiceBestFirstBeamSearchDatasetWithLimitedNodes,
 )
-from encoder.utils.config import SocialIQAMultipleChoiceSampleTrainConfig, fix_missing
+from encoder.utils.config import SocialIQASingleChoiceSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.adafactor import Adafactor
 
 
-class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
+class SocialIQASingleChoiceSampleTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: SocialIQAMultipleChoiceSampleTrainConfig,
+        config: SocialIQASingleChoiceSampleTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -319,7 +319,7 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
                 max_inference_num=self.config.max_inference_num,
-                expand_choice_num=3,
+                expand_choice_num=self.config.expand_choice_num,
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
@@ -353,7 +353,7 @@ class SocialIQAMultipleChoiceSampleTrainer(pl.LightningModule):
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
                 max_inference_num=self.config.max_inference_num,
-                expand_choice_num=3,
+                expand_choice_num=self.config.expand_choice_num,
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,

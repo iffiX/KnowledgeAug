@@ -1,3 +1,4 @@
+import itertools
 import os
 import copy
 import json
@@ -10,14 +11,89 @@ import torch as t
 from tqdm import tqdm
 from itertools import chain
 from typing import List, Tuple, Dict, Union
+from nltk.corpus import wordnet
+from nltk.stem import WordNetLemmatizer
 from transformers import AutoTokenizer, PreTrainedTokenizerBase, BatchEncoding
 from encoder.dataset.download import ANLI
 from encoder.dataset.matcher.anli import ANLIMatcher
 from encoder.dataset.matcher.fact_selector import FactSelector
 from encoder.utils.settings import preprocess_cache_dir
-from encoder.utils.file import PickleCache, open_file_with_create_directories
+from encoder.utils.file import JSONCache, PickleCache, open_file_with_create_directories
 from .base import StaticIterableDataset
 from .utils import normalize_t5_input
+
+import multiprocessing as mp
+
+
+class ANLIPathCreator:
+    instance = None  # type: ANLIPathCreator
+
+    def __init__(
+        self,
+        data: List[Tuple[str, str, str, str]],
+        matcher: ANLIMatcher,
+        max_depth: int = 2,
+    ):
+        self.data = data
+        self.matcher = matcher
+        self.max_depth = max_depth
+
+    @staticmethod
+    def get_path_for_sample(idx):
+        self = ANLIPathCreator.instance
+        result1 = self.matcher.find_shortest_path(
+            source_sentence=self.data[idx][1],
+            target_sentence=self.data[idx][2],
+            find_target=True,
+            max_depth_for_each_node=self.max_depth,
+            min_levels_before_checking_target_reached=0,
+        )
+        result2 = self.matcher.find_shortest_path(
+            source_sentence=self.data[idx][2],
+            target_sentence=self.data[idx][3],
+            find_target=True,
+            max_depth_for_each_node=self.max_depth,
+            min_levels_before_checking_target_reached=0,
+        )
+        l1_path = ", ".join(", ".join(res) for res in result1[0])
+        l2_path = ", ".join(", ".join(res) for res in result2[0])
+        return self.data[idx][0], " # ".join([l1_path, l2_path])
+
+    @staticmethod
+    def initialize_pool(data, matcher, max_depth):
+        ANLIPathCreator.instance = ANLIPathCreator(data, matcher, max_depth)
+
+
+class ANLIPathGenerator:
+    def __init__(
+        self,
+        data: List[Tuple[str, str, str, str]],
+        matcher: ANLIMatcher,
+        max_depth: int = 2,
+    ):
+        """
+        Args:
+            data: id, hypothesis1, choice, hypothesis2
+        """
+        self.data, self.matcher, self.max_depth = (
+            data,
+            matcher,
+            max_depth,
+        )
+        self.paths = self.generate_paths()
+
+    def generate_paths(self):
+        result = {}
+        with mp.Pool(
+            initializer=ANLIPathCreator.initialize_pool,
+            initargs=(self.data, self.matcher, self.max_depth),
+        ) as pool, tqdm(total=len(self.data)) as pbar:
+            for (_id, transitions) in pool.imap_unordered(
+                ANLIPathCreator.get_path_for_sample, range(len(self.data)),
+            ):
+                pbar.update()
+                result[_id] = transitions
+        return result
 
 
 class ANLIBaseDataset:
@@ -38,10 +114,13 @@ class ANLIBaseDataset:
             os.path.join(preprocess_cache_dir, "anli.data"), self.generate_data,
         ) as cache:
             random.Random(42).shuffle(cache.data["train"])
-            self.train_data = cache.data["train"][: len(cache.data["train"]) // 8]
+            self.train_data = [
+                d for d in cache.data["train"] if d["choices"][0] != d["choices"][1]
+            ]
             self.validate_data = cache.data["validate"]
             self.test_data = cache.data["test"]
 
+        self.generate_and_add_paths()
         # self.generate_and_add_knowledge()
         self.set_corpus()
 
@@ -210,49 +289,49 @@ class ANLIBaseDataset:
             "test": self.parse_data(self.anli.test_path),
         }
 
-    def generate_and_add_knowledge(self):
-        def generate():
-            queries = []
-            query_ids = []
-            for data in chain(self.train_data, self.validate_data, self.test_data,):
-                id_ = data["id"]
-                queries.append(data["choices"][0])
-                queries.append(data["choices"][1])
-                query_ids += [id_, id_]
-
-            texts, masks = self.matcher.get_atomic_knowledge_text_and_mask()
-            text_to_index = {t: idx for idx, t in enumerate(texts)}
-
-            fact_selector = FactSelector(
-                queries, texts, max_facts=3, inner_batch_size=1024
-            )
-
-            all_selected_facts = sorted(
-                list(set([f for facts in fact_selector.selected_facts for f in facts]))
-            )
-            all_selected_facts_mask = [
-                masks[text_to_index[f]] for f in all_selected_facts
-            ]
-            return (
-                fact_selector.selected_facts,
-                all_selected_facts,
-                all_selected_facts_mask,
-            )
-
-        with PickleCache(
-            os.path.join(
-                preprocess_cache_dir, "anli_augment_generator_selected_facts.data"
-            ),
-            generate,
-        ) as cache:
-            selected_facts, all_selected_facts, all_selected_facts_mask = cache.data
-
-        self.matcher.add_atomic_knowledge(all_selected_facts, all_selected_facts_mask)
-        for idx, data in enumerate(
-            chain(self.train_data, self.validate_data, self.test_data,)
-        ):
-            potential_facts = selected_facts[idx * 2 + data["label"]]
-            data["facts"] = [potential_facts[0]] if potential_facts else []
+    # def generate_and_add_knowledge(self):
+    #     def generate():
+    #         queries = []
+    #         query_ids = []
+    #         for data in chain(self.train_data, self.validate_data, self.test_data,):
+    #             id_ = data["id"]
+    #             queries.append(data["choices"][0])
+    #             queries.append(data["choices"][1])
+    #             query_ids += [id_, id_]
+    #
+    #         texts, masks = self.matcher.get_atomic_knowledge_text_and_mask()
+    #         text_to_index = {t: idx for idx, t in enumerate(texts)}
+    #
+    #         fact_selector = FactSelector(
+    #             queries, texts, max_facts=3, inner_batch_size=1024
+    #         )
+    #
+    #         all_selected_facts = sorted(
+    #             list(set([f for facts in fact_selector.selected_facts for f in facts]))
+    #         )
+    #         all_selected_facts_mask = [
+    #             masks[text_to_index[f]] for f in all_selected_facts
+    #         ]
+    #         return (
+    #             fact_selector.selected_facts,
+    #             all_selected_facts,
+    #             all_selected_facts_mask,
+    #         )
+    #
+    #     with PickleCache(
+    #         os.path.join(
+    #             preprocess_cache_dir, "anli_augment_generator_selected_facts.data"
+    #         ),
+    #         generate,
+    #     ) as cache:
+    #         selected_facts, all_selected_facts, all_selected_facts_mask = cache.data
+    #
+    #     self.matcher.add_atomic_knowledge(all_selected_facts, all_selected_facts_mask)
+    #     for idx, data in enumerate(
+    #         chain(self.train_data, self.validate_data, self.test_data,)
+    #     ):
+    #         potential_facts = selected_facts[idx * 2 + data["label"]]
+    #         data["facts"] = [potential_facts[0]] if potential_facts else []
 
     def parse_data(self, dataset_path, labels_path=None):
         data = []
@@ -276,12 +355,15 @@ class ANLIBaseDataset:
             preprocessed = {
                 "text_question": entry["obs1"] + " " + entry["obs2"],
                 "text_choices": text_choices,
+                "obs1": entry["obs1"],
+                "obs2": entry["obs2"],
                 "choices": choices,
                 "choice_masks": mask,
                 "diff_choices": diff,
                 "id": entry["story_id"] + "|" + str(idx),
                 "story_id": entry["story_id"],
                 "facts": [],
+                "paths": [],
             }
             if labels_path is not None:
                 # For BERT, ALBERT, ROBERTA, use label instead, which is an integer
@@ -293,34 +375,45 @@ class ANLIBaseDataset:
         return data
 
     def get_different_parts(self, choice1, choice2):
-        words1 = set(
-            w.lower()
+        lemmatizer = WordNetLemmatizer()
+        lemma_map = {"N": wordnet.NOUN, "J": wordnet.ADJ, "V": wordnet.VERB}
+        raw_words1 = [
+            (w, pos)
             for w, pos in nltk.pos_tag(nltk.word_tokenize(choice1))
             if pos.startswith("NN")
             or pos.startswith("JJ")
             or (pos.startswith("VB") and w.lower() not in self.matcher.VERB_FILTER_SET)
-        )
-        words2 = set(
-            w.lower()
+        ]
+        raw_words2 = [
+            (w, pos)
             for w, pos in nltk.pos_tag(nltk.word_tokenize(choice2))
             if pos.startswith("NN")
             or pos.startswith("JJ")
             or (pos.startswith("VB") and w.lower() not in self.matcher.VERB_FILTER_SET)
-        )
+        ]
+        words1_map = {
+            lemmatizer.lemmatize(w, lemma_map[pos[0]]).lower(): w
+            for w, pos in raw_words1
+        }
+        words2_map = {
+            lemmatizer.lemmatize(w, lemma_map[pos[0]]).lower(): w
+            for w, pos in raw_words2
+        }
+        words1 = set(words1_map.keys())
+
+        words2 = set(words2_map.keys())
+
         selected_words1 = words1.difference(words2)
-        selected_words1 = sorted(
-            list(w for w in (selected_words1 or words1) if len(w) > 0)
-        )
+        selected_words1 = sorted(list(w for w in selected_words1 if len(w) > 0))
         selected_words2 = words2.difference(words1)
-        selected_words2 = sorted(
-            list(w for w in (selected_words2 or words2) if len(w) > 0)
-        )
+        selected_words2 = sorted(list(w for w in selected_words2 if len(w) > 0))
         mask1 = ["-"] * len(choice1)
         mask2 = ["-"] * len(choice2)
         choice1 = choice1.lower()
         choice2 = choice2.lower()
         for word in selected_words1:
             start = 0
+            word = words1_map[word]
             while True:
                 start = choice1.find(word, start)
                 if start != -1:
@@ -330,6 +423,7 @@ class ANLIBaseDataset:
                     break
         for word in selected_words2:
             start = 0
+            word = words2_map[word]
             while True:
                 start = choice2.find(word, start)
                 if start != -1:
@@ -341,6 +435,43 @@ class ANLIBaseDataset:
             (" ".join(selected_words1), " ".join(selected_words2),),
             ("".join(mask1), "".join(mask2)),
         )
+
+    def generate_and_add_paths(self):
+        all_data = [
+            d
+            for d in itertools.chain(
+                self.train_data, self.validate_data, self.test_data
+            )
+            if len(d["diff_choices"][0]) > 0 and len(d["diff_choices"][1]) > 0
+        ]
+
+        def generate():
+            choice1_paths = ANLIPathGenerator(
+                [
+                    (d["id"], d["obs1"], d["diff_choices"][0], d["obs2"])
+                    for d in all_data
+                ],
+                self.matcher,
+                2,
+            ).paths
+            choice2_paths = ANLIPathGenerator(
+                [
+                    (d["id"], d["obs1"], d["diff_choices"][1], d["obs2"])
+                    for d in all_data
+                ],
+                self.matcher,
+                2,
+            ).paths
+            paths = {}
+            for key in choice1_paths.keys():
+                paths[key] = [choice1_paths[key], choice2_paths[key]]
+            return paths
+
+        with JSONCache(
+            os.path.join(preprocess_cache_dir, "anli_paths.json"), generate
+        ) as cache:
+            for d in all_data:
+                d["paths"] = cache.data[d["id"]]
 
     def generate_choice_str(self, choices: List[str]):
         result = ""
@@ -360,31 +491,31 @@ class ANLIAugmentDataset(ANLIBaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        augment_contexts: Tuple[Dict[str, List[str]], Dict[str, List[str]]],
+        # augment_contexts: Tuple[Dict[str, List[str]], Dict[str, List[str]]],
         max_seq_length: int = 300,
         output_mode: str = "single",
     ):
         if output_mode not in ("single", "splitted"):
             raise ValueError(f"Invalid output_mode {output_mode}")
 
-        self.augment_contexts = augment_contexts
+        # self.augment_contexts = augment_contexts
         self.max_seq_length = max_seq_length
         self.output_mode = output_mode
         self.rand = random.Random(42)
         self.rand_train = True
 
         super(ANLIAugmentDataset, self).__init__(tokenizer)
-        for split, split_data in (
-            ("train", self.train_data),
-            ("validate", self.validate_data),
-            ("test", self.test_data),
-        ):
-            found_count = sum(
-                1 for data in split_data if data["id"] in augment_contexts[0]
-            )
-            print(
-                f"{found_count}/{len(split_data)} samples of {split} split have contexts"
-            )
+        # for split, split_data in (
+        #     ("train", self.train_data),
+        #     ("validate", self.validate_data),
+        #     ("test", self.test_data),
+        # ):
+        #     found_count = sum(
+        #         1 for data in split_data if data["id"] in augment_contexts[0]
+        #     )
+        #     print(
+        #         f"{found_count}/{len(split_data)} samples of {split} split have contexts"
+        #     )
 
     def generator(self, index: int, split: str):
         if split == "train":
@@ -425,11 +556,15 @@ class ANLIAugmentDataset(ANLIBaseDataset):
             data["answer"] = answer
         else:
             encoded_sentence = self.tokenizer(
-                [", ".join(self.get_augment_context(split, data["id"]))]
-                * len(data["choices"]),
+                # [", ".join(self.get_augment_context(split, data["id"]))]
+                # * len(data["choices"]),
+                data["paths"] if len(data["paths"]) == 2 else ["", ""],
                 [
-                    self.normalize_question(data["text_question"])
-                    + " Hypothesis: "
+                    "Question: "
+                    + self.normalize_question(data["text_question"])
+                    + " Choices: "
+                    + ", ".join(data["choices"])
+                    + " Answer: "
                     + ch
                     for ch in data["choices"]
                 ],
@@ -438,6 +573,17 @@ class ANLIAugmentDataset(ANLIBaseDataset):
                 max_length=self.max_seq_length,
                 return_tensors="pt",
             )
+            # encoded_sentence = self.tokenizer(
+            #     [self.normalize_question(data["text_question"])] * len(data["choices"]),
+            #     [
+            #         " Choices: " + ", ".join(data["choices"]) + " Answer: " + ch
+            #         for ch in data["choices"]
+            #     ],
+            #     truncation="only_first",
+            #     padding="max_length",
+            #     max_length=self.max_seq_length,
+            #     return_tensors="pt",
+            # )
             data["sentence"] = encoded_sentence.input_ids.unsqueeze(0)
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
@@ -450,16 +596,17 @@ class ANLIAugmentDataset(ANLIBaseDataset):
             return (question + ".").capitalize()
 
     def get_augment_context(self, split, data_id, no_rand=False):
-        if split != "train":
-            augment_context = self.augment_contexts[0].get(data_id, [])
-        else:
-            if self.rand_train and not no_rand:
-                ref_context = self.augment_contexts[1].get(data_id)
-                augment_context = self.augment_contexts[0].get(data_id, None)
-                if augment_context is not None:
-                    augment_context = self.rand.choice([ref_context, augment_context])
-                else:
-                    augment_context = ref_context
-            else:
-                augment_context = self.augment_contexts[1].get(data_id)
+        # if split != "train":
+        #     augment_context = self.augment_contexts[0].get(data_id, [])
+        # else:
+        #     if self.rand_train and not no_rand:
+        #         ref_context = self.augment_contexts[1].get(data_id)
+        #         augment_context = self.augment_contexts[0].get(data_id, None)
+        #         if augment_context is not None:
+        #             augment_context = self.rand.choice([ref_context, augment_context])
+        #         else:
+        #             augment_context = ref_context
+        #     else:
+        #         augment_context = self.augment_contexts[1].get(data_id)
+        augment_context = self.augment_contexts[0].get(data_id, [])
         return augment_context

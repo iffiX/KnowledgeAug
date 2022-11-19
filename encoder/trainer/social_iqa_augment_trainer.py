@@ -118,44 +118,4 @@ class SocialIQAAugmentTrainer(AugmentBaseTrainer):
                 # paths = [", ".join(path[:1]) + " # " for path in raw_paths]
                 contexts[id] = list(dict.fromkeys(paths))
 
-        # authoritative train context
-        train_contexts = {}
-        with JSONCache(
-            os.path.join(
-                preprocess_cache_dir, f"social_iqa_sample_train_result_sc.json",
-            ),
-            generate_func=self.generate_train_paths,
-        ) as cache:
-            print(f"Loaded {len(contexts)} contexts")
-            data = cache.data
-        for id, (raw_paths, raw_path_edges) in data.items():
-            d = [d for d in dataset.train_data if d["id"] == id][0]
-            if d["facts"] and len(raw_paths) > 0:
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    raw_paths = dataset.matcher.sub_paths_to_annotations(
-                        raw_path_edges,
-                        templates="standard",
-                        prioritize_original_annotation=True,
-                    )
-                train_contexts[id] = [
-                    ", ".join([xx for x in raw_paths[:1] for xx in x]) + " # "
-                ]
-            else:
-                train_contexts[id] = []
-
-        return contexts, train_contexts
-
-    def generate_train_paths(self):
-        dataset = SocialIQABaseDataset(tokenizer=None)
-        generator = TrainPathGenerator(
-            [
-                (d["id"], d["context"], d["text_answer"], d["facts"],)
-                for d in dataset.train_data
-            ],
-            dataset.matcher,
-            max_depth=self.config.max_depth,
-            min_steps=1,  # prevent empty results
-        )
-        return generator.paths
+        return contexts

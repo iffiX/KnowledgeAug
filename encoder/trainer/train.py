@@ -5,11 +5,9 @@ import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
 from .anli_augment_trainer import ANLIAugmentTrainer
-from .anli_sample_trainer import ANLIMultipleChoiceSampleTrainer
+from .anli_sample_trainer import ANLISingleChoiceSampleTrainer
 from .social_iqa_augment_trainer import SocialIQAAugmentTrainer
-from .social_iqa_sample_trainer import SocialIQAMultipleChoiceSampleTrainer
-from .commonsense_qa_augment_trainer import CommonsenseQAAugmentTrainer
-from .commonsense_qa_sample_trainer import CommonsenseQASampleTrainer
+from .social_iqa_sample_trainer import SocialIQASingleChoiceSampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
 from .openbook_qa_sc_sample_trainer import OpenBookQASingleChoiceSampleTrainer
 from .openbook_qa_mc_sample_trainer import OpenBookQAMultipleChoiceSampleTrainer
@@ -17,20 +15,16 @@ from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
 from .qasc_sc_sample_trainer import QASCSingleChoiceSampleTrainer
 from .qasc_mc_sample_trainer import QASCMultipleChoiceSampleTrainer
 from .qasc_augment_trainer import QASCAugmentTrainer
-from .ensemble_trainer import EnsembleTrainer
-from .test_distributed_trainer import TestDistributedTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
-    "anli_mc_sample": ANLIMultipleChoiceSampleTrainer,
+    "anli_sc_sample": ANLISingleChoiceSampleTrainer,
     "anli_augment": ANLIAugmentTrainer,
-    "social_iqa_sc_sample": SocialIQAMultipleChoiceSampleTrainer,
+    "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainer,
     "social_iqa_augment": SocialIQAAugmentTrainer,
-    "commonsense_qa_sample": CommonsenseQASampleTrainer,
-    "commonsense_qa_augment": CommonsenseQAAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,
     "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainer,
     "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainer,
@@ -38,8 +32,6 @@ stage_name_to_trainer_map = {
     "qasc_sc_sample": QASCSingleChoiceSampleTrainer,
     "qasc_mc_sample": QASCMultipleChoiceSampleTrainer,
     "qasc_augment": QASCAugmentTrainer,
-    "test_distributed": TestDistributedTrainer,
-    "ensemble": EnsembleTrainer,
 }
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -188,7 +180,6 @@ def _train(
         reload_dataloaders_every_epoch=False,
         limit_train_batches=getattr(stage_config, "train_steps", None) or 1.0,
         limit_val_batches=getattr(stage_config, "validate_steps", None) or 1.0,
-        num_sanity_val_steps=0 if type(stage_trainer) == EnsembleTrainer else 2,
         max_epochs=getattr(stage_config, "epochs", 1),
         # # For iterable datasets, to validate after each epoch,
         # # set check interval equal to number of training steps.

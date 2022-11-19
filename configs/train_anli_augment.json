@@ -7,7 +7,7 @@
             "epochs": 10,
             "l2_regularization": 0,
             "learning_rate": 5e-6,
-            "max_seq_length": 100,
+            "max_seq_length": 150,
             "scheduler_warmup_proportion": 0,
             "load": false,
             "optimizer_class": "AdamW",
@@ -16,7 +16,7 @@
         }
     ],
     "early_stopping_patience": 15,
-    "gpus": [0],
+    "gpus": [0, 1],
     "stages": [
         "anli_augment"
     ],

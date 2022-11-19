@@ -19,18 +19,6 @@
 // source id, relation id, target id, weight, annotated representation.
 using Edge = std::tuple<long, long, long, float, std::string>;
 
-template <typename T>
-class UnorderedPair {
-    T value1, value2;
-    UnorderedPair(T value1, T value2);
-    bool operator ==(const UnorderedPair &other) const;
-};
-
-template <typename T>
-struct UnorderedPairHash {
-    std::size_t operator()(const UnorderedPair<T> &pair) const;
-};
-
 class TrieNode {
 public:
     int token = -1;
@@ -304,26 +292,6 @@ public:
                                                    size_t splitNodeMinimumEdgeNum = 20,
                                                    float splitNodeMinimumSimilarity = 0.35) const;
 
-    MatchResult
-    matchByNodeEmbedding(const std::vector<int> &sourceSentence, const std::vector<int> &targetSentence = {},
-                         const std::vector<int> &sourceMask = {}, const std::vector<int> &targetMask = {},
-                         const std::vector<long> &disabledNodes = {},
-                         int maxTimes = 100, int maxDepth = 3, int seed = -1,
-                         int edgeTopK = -1, int sourceContextRange = 0, bool trimPath = true,
-                         size_t splitNodeMinimumEdgeNum = 20,
-                         float splitNodeMinimumSimilarity = 0.35,
-                         float stopSearchingEdgeIfSimilarityBelow = 0,
-                         float sourceContextWeight = 0.2) const;
-
-    std::vector<std::string> matchResultPathsToStrings(const MatchResult &matchResult) const;
-
-    MatchResult joinMatchResults(const std::vector<MatchResult> &matchResults) const;
-
-    SelectResult selectPaths(const MatchResult &matchResult,
-                             int maxEdges,
-                             float discardEdgesIfRankBelow,
-                             bool filterShortAccuratePaths) const;
-
     void save(const std::string &archivePath) const;
 
     void load(const std::string &archivePath);
@@ -365,13 +333,6 @@ private:
                         const std::vector<int> &node,
                         size_t splitNodeMinimumEdgeNum,
                         float splitNodeMinimumSimilarity) const;
-
-    void trimPath(VisitedPath &path) const;
-
-    void updatePath(VisitedPath &path,
-                    const std::unordered_set<long> &coveredCompositeNodes,
-                    const std::unordered_set<std::pair<long, long>, PairHash> &coveredNodePairs,
-                    int remainingEdges) const;
 
     static void keepTopK(std::vector<float> &weights, int k = -1);
 };

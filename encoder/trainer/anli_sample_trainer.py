@@ -20,18 +20,18 @@ from .utils import make_scheduler
 from encoder.models.sample.model import RewardPredictor
 from encoder.dataset.anli import ANLIBaseDataset
 from encoder.dataset.sample import (
-    RewardPredictorMultipleChoiceDataset,
-    RewardPredictorMultipleChoiceBestFirstBeamSearchDataset,
+    RewardPredictorSingleChoiceDataset,
+    RewardPredictorSingleChoiceBestFirstBeamSearchDataset,
 )
-from encoder.utils.config import ANLIMultipleChoiceSampleTrainConfig, fix_missing
+from encoder.utils.config import ANLISingleChoiceSampleTrainConfig, fix_missing
 from encoder.utils.settings import preprocess_cache_dir
 from encoder.utils.adafactor import Adafactor
 
 
-class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
+class ANLISingleChoiceSampleTrainer(pl.LightningModule):
     def __init__(
         self,
-        config: ANLIMultipleChoiceSampleTrainConfig,
+        config: ANLISingleChoiceSampleTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
@@ -48,19 +48,16 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
             pad_by_longest=config.pad_by_longest,
             max_length=config.max_seq_length,
         )
-        self.train_reward_predictor_dataset = RewardPredictorMultipleChoiceDataset(
+        self.train_reward_predictor_dataset = RewardPredictorSingleChoiceDataset(
             f"anli_train",
             [
                 (
                     d["id"],
                     d["text_question"],
                     d["text_answer"],
-                    # # Only use the different part in answer
-                    # d["diff_choices"][d["label"]],
-                    ", ".join(d["choices"]),
+                    d["choices"],
                     d["facts"],
-                    # "+" * len(d["diff_choices"][d["label"]]),
-                    # "--".join(d["choice_masks"]),
+                    d["choice_masks"],
                 )
                 for d in getattr(self.dataset, f"train_data")
             ],
@@ -104,7 +101,7 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
         return self.create_sample_inference_dataloader_for_validate()
 
     def test_dataloader(self):
-        path = os.path.join(preprocess_cache_dir, "anli_sample_result_mc.json")
+        path = os.path.join(preprocess_cache_dir, "anli_sample_result_sc.json")
         if os.path.exists(path):
             with open(path, "r",) as file:
                 self.test_result.update(json.load(file))
@@ -200,7 +197,7 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
                 result[id_] = (paths, path_edges, path_choices)
 
             with open(
-                os.path.join(preprocess_cache_dir, "anli_sample_result_mc.json"), "w",
+                os.path.join(preprocess_cache_dir, "anli_sample_result_sc.json"), "w",
             ) as file:
                 json.dump(result, file, indent=2)
 
@@ -269,13 +266,13 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
     def create_sample_inference_dataloader_for_validate(self):
         data = self.dataset.validate_data
         return DataLoader(
-            dataset=RewardPredictorMultipleChoiceBestFirstBeamSearchDataset(
+            dataset=RewardPredictorSingleChoiceBestFirstBeamSearchDataset(
                 [
                     (
                         data[i]["id"],
                         data[i]["text_question"],
-                        ", ".join(data[i]["choices"]),
-                        # "--".join(data[i]["choice_masks"]),
+                        data[i]["choices"],
+                        data[i]["choice_masks"],
                     )
                     for i in self.validate_indices
                 ],
@@ -284,6 +281,7 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
                 existing_ids=set(self.test_result.keys()),
                 max_steps=self.config.max_steps,
                 max_depth=self.config.max_depth,
+                expand_choice_num=2,
                 beam_size=self.config.beam_size,
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
@@ -292,7 +290,7 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
                 parallel=not self.is_distributed,
-                stop_when_reaching_target_nodes=False,
+                stop_when_reaching_target_nodes=True,
             ),
             batch_size=1,
             collate_fn=lambda x: x,
@@ -305,22 +303,16 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
             if split == "train" and d["story_id"] in added:
                 continue
             added.add(d["story_id"])
-            data.append(
-                (
-                    d["id"],
-                    d["text_question"],
-                    ", ".join(d["choices"]),
-                    # "--".join(d["choice_masks"]),
-                )
-            )
+            data.append((d["id"], d["text_question"], d["choices"], d["choice_masks"],))
         return DataLoader(
-            dataset=RewardPredictorMultipleChoiceBestFirstBeamSearchDataset(
+            dataset=RewardPredictorSingleChoiceBestFirstBeamSearchDataset(
                 data,
                 self.reward_predictor,
                 self.dataset.matcher,
                 existing_ids=set(self.test_result.keys()),
                 max_steps=self.config.max_steps,
                 max_depth=self.config.max_depth,
+                expand_choice_num=2,
                 beam_size=self.config.beam_size,
                 return_beam_num=min(self.config.beam_size, self.config.return_beam_num),
                 min_logits=self.config.min_logits,
@@ -328,6 +320,7 @@ class ANLIMultipleChoiceSampleTrainer(pl.LightningModule):
                 inference_batch_size=self.config.inference_batch_size,
                 state_delimiter=self.config.state_delimeter,
                 end_of_reasoning=self.config.end_of_reasoning,
+                stop_when_reaching_target_nodes=True,
             ),
             batch_size=1,
             collate_fn=lambda x: x,

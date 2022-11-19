@@ -114,8 +114,6 @@ class SocialIQABaseDataset:
         self.set_corpus()
 
     def validate_answer_retreival(self, data, facts, allowed_knowledge):
-        from pprint import pprint
-
         fact_retrieval_count = 0
         allowed_retrieval_count = 0
         has_fact_count = 0
@@ -127,8 +125,6 @@ class SocialIQABaseDataset:
                 has_fact_count += 1
                 if any(word in fact for word in words):
                     fact_retrieval_count += 1
-                # else:
-                #     pprint(d)
             if allowed_knowledge[d["id"]]:
                 allowed = allowed_knowledge[d["id"]]
                 has_allowed_count += 1
@@ -136,10 +132,12 @@ class SocialIQABaseDataset:
                     if any(word in f for word in words):
                         allowed_retrieval_count += 1
                         break
-        print(f"fact rate: {fact_retrieval_count / has_fact_count}")
-        print(f"allowed_rate: {allowed_retrieval_count/has_allowed_count}")
-        print(f"fact count: {has_fact_count}")
-        print(f"allowed count: {has_allowed_count}")
+        print(f"correct choice in fact rate: {fact_retrieval_count / has_fact_count}")
+        print(
+            f"correct choice in allowed knowledge rate: {allowed_retrieval_count / has_allowed_count}"
+        )
+        print(f"total samples with fact count: {has_fact_count}")
+        print(f"total samples with allowed knowledge count: {has_allowed_count}")
 
     @property
     def train_dataset(self):
@@ -419,7 +417,13 @@ class SocialIQABaseDataset:
             choices.append(data["text_answer"])
             query_ids.append(data["id"])
 
-        selected_facts = self.find_related_knowledge(contexts, questions, choices)
+        selected_facts = self.find_related_knowledge(
+            contexts,
+            questions,
+            choices,
+            context_similarity=0.25,
+            choice_similarity=0.55,
+        )
 
         return {
             id_: [allowed_facts[0]] if allowed_facts else []
@@ -440,7 +444,13 @@ class SocialIQABaseDataset:
         texts, masks, _ = self.matcher.get_atomic_knowledge_text_and_mask()
         text_to_index = {t: idx for idx, t in enumerate(texts)}
 
-        selected_facts = self.find_related_knowledge(contexts, questions, choices)
+        selected_facts = self.find_related_knowledge(
+            contexts,
+            questions,
+            choices,
+            context_similarity=0.25,
+            choice_similarity=0.55,
+        )
 
         all_selected_facts = sorted(
             list(set([f for facts in selected_facts for f in facts]))
@@ -464,7 +474,9 @@ class SocialIQABaseDataset:
             all_selected_facts_mask,
         )
 
-    def find_related_knowledge(self, contexts, questions, choices):
+    def find_related_knowledge(
+        self, contexts, questions, choices, context_similarity, choice_similarity,
+    ):
         embedder = Embedder("cuda:0")
         (
             knowledge,
@@ -535,9 +547,9 @@ class SocialIQABaseDataset:
                     for i in t.topk(
                         similarities, k=min(10, similarities.shape[0])
                     ).indices
-                    if context_similarities[i] > 0.25
-                    and choice_similarities[i] > 0.55
-                    and similarities[i] > 0.8
+                    if context_similarities[i] > context_similarity
+                    and choice_similarities[i] > choice_similarity
+                    and similarities[i] > context_similarity + choice_similarity
                 ]
             )
         return selected_facts
@@ -547,7 +559,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
-        augment_contexts: Tuple[Dict[str, List[str]], Dict[str, List[str]]],
+        augment_contexts: Dict[str, List[str]],
         max_seq_length: int = 300,
         output_mode: str = "single",
     ):
@@ -567,7 +579,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             ("test", self.test_data),
         ):
             found_count = sum(
-                1 for data in split_data if data["id"] in augment_contexts[0]
+                1 for data in split_data if data["id"] in augment_contexts
             )
             print(
                 f"{found_count}/{len(split_data)} samples of {split} split have contexts"
@@ -586,7 +598,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
         if self.output_mode == "single":
             encoded_sentence = self.tokenizer(
                 normalize_t5_input(
-                    ", ".join(self.get_augment_context(split, data["id"]))
+                    ", ".join(self.augment_contexts.get(data["id"], []))
                     + " \\n "
                     + data["text_question"]
                     + " \\n "
@@ -612,7 +624,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             data["answer"] = answer
         else:
             encoded_sentence = self.tokenizer(
-                [", ".join(self.get_augment_context(split, data["id"]))]
+                [", ".join(self.augment_contexts.get(data["id"], []))]
                 * len(data["choices"]),
                 [
                     "Question: "
@@ -634,20 +646,3 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
         return data
-
-    def get_augment_context(self, split, data_id, no_rand=False):
-        # if split != "train":
-        #     augment_context = self.augment_contexts[0].get(data_id, [])
-        # else:
-        #     if self.rand_train and not no_rand:
-        #         ref_context = self.augment_contexts[1].get(data_id)
-        #         augment_context = self.augment_contexts[0].get(data_id, None)
-        #         if augment_context is not None:
-        #             augment_context = self.rand.choice([ref_context, augment_context])
-        #         else:
-        #             augment_context = ref_context
-        #     else:
-        #         augment_context = self.augment_contexts[1].get(data_id)
-        augment_context = self.augment_contexts[0].get(data_id, [])
-        # augment_context = [f + " # " for f in self.question_allowed_knowledge[data_id]]
-        return augment_context

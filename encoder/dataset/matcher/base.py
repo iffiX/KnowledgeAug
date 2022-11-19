@@ -5,7 +5,7 @@ import nltk
 import spacy
 import logging
 import multiprocessing as mp
-from typing import List, Dict, Tuple, Union
+from typing import List, Tuple, Union
 from nltk.corpus import stopwords
 from transformers import PreTrainedTokenizerBase
 from encoder.dataset.matcher import KnowledgeMatcher
@@ -187,7 +187,7 @@ class BaseMatcher:
         self,
         source_sentence: str,
         target_sentence: str,
-        intermediate_nodes: List[str],
+        intermediate_nodes: List[str] = [],
         source_mask: str = "",
         target_mask: str = "",
         find_target: bool = False,
@@ -403,186 +403,6 @@ class BaseMatcher:
             split_node_minimum_edge_num=split_node_minimum_edge_num,
             split_node_minimum_similarity=split_node_minimum_similarity,
         )
-
-    def match_by_node_embedding(
-        self,
-        source_sentence: str,
-        target_sentence: str = "",
-        source_mask: str = "",
-        target_mask: str = "",
-        disabled_nodes: List[int] = None,
-        max_times: int = 1000,
-        max_depth: int = 3,
-        seed: int = -1,
-        edge_top_k: int = -1,
-        source_context_range: int = 0,
-        trim_path: bool = True,
-        split_node_minimum_edge_num: int = 20,
-        split_node_minimum_similarity: float = 0.35,
-        stop_searching_edge_if_similarity_below: float = 0,
-        source_context_weight: float = 0.5,
-    ):
-        """
-        Returns:
-            A match result object that can be unified or be used to select paths
-        """
-        source_tokens, _source_mask = self.tokenize_and_mask(
-            source_sentence, source_mask
-        )
-        if len(target_sentence) == 0:
-            target_tokens, _target_mask = source_tokens, _source_mask
-        else:
-            target_tokens, _target_mask = self.tokenize_and_mask(
-                target_sentence, target_mask
-            )
-
-        optional_args = {}
-        if disabled_nodes is not None:
-            optional_args["disabled_nodes"] = disabled_nodes
-        result = self.matcher.match_by_node_embedding(
-            source_sentence=source_tokens,
-            target_sentence=target_tokens,
-            source_mask=_source_mask,
-            target_mask=_target_mask,
-            max_times=max_times,
-            max_depth=max_depth,
-            seed=seed,
-            edge_top_k=edge_top_k,
-            source_context_range=source_context_range,
-            trim_path=trim_path,
-            split_node_minimum_edge_num=split_node_minimum_edge_num,
-            split_node_minimum_similarity=split_node_minimum_similarity,
-            stop_searching_edge_if_similarity_below=stop_searching_edge_if_similarity_below,
-            source_context_weight=source_context_weight,
-            **optional_args,
-        )
-        return result
-
-    def unify_match(self, matches: list):
-        """
-        Unify several match result into one.
-        """
-        return self.matcher.join_match_results(matches)
-
-    def select_paths(
-        self,
-        match,
-        max_edges: int = 10,
-        discard_edges_if_rank_below: Union[float, str] = 0,
-        filter_short_accurate_paths: bool = False,
-    ) -> Dict[int, Tuple[int, List[Tokens], List[float]]]:
-        if isinstance(discard_edges_if_rank_below, str):
-            if discard_edges_if_rank_below != "auto":
-                raise ValueError(
-                    "discard_edges_if_rank_below can only be set to float or 'auto'"
-                )
-            discard_edges_if_rank_below = max(-match.target_node_num / 40 + 0.325, 0.2)
-        return self.matcher.select_paths(
-            match, max_edges, discard_edges_if_rank_below, filter_short_accurate_paths
-        )
-
-    def selection_to_list_of_strings(
-        self, selection: Dict[int, Tuple[int, List[Tokens], List[float]]],
-    ) -> List[str]:
-        """
-        Returns List of knowledge sequences
-        """
-        knowledge_tokens = list(
-            v for _, (__, v, ___) in selection.items()
-        )  # type: List[List[Tokens]]
-        knowledge = []
-        for kt_list in knowledge_tokens:
-            for kt in kt_list:
-                knowledge.append(self.tokenizer.decode(kt))
-        return knowledge
-
-    def insert_selection(
-        self,
-        sentence: str,
-        selection: Dict[int, Tuple[int, List[Tokens], List[float]]],
-        begin: str = "(",
-        sep: str = ",",
-        end: str = ")",
-        insert_at_end: bool = False,
-        include_weights: bool = False,
-    ) -> str:
-        sentence_tokens, _ = self.tokenize_and_mask(sentence)
-        if len(selection) == 0:
-            return self.tokenizer.decode(sentence_tokens)
-        begin_tokens = self.tokenizer.encode(begin, add_special_tokens=False)
-        end_tokens = self.tokenizer.encode(end, add_special_tokens=False)
-        sep_tokens = self.tokenizer.encode(sep, add_special_tokens=False)
-        new_matches = {}
-        for pos, (_, edges, weights) in selection.items():
-            new_edges = []
-            for i, (edge, weight) in enumerate(zip(edges, weights)):
-                if not insert_at_end and i == 0:
-                    new_edges += begin_tokens
-                if include_weights:
-                    new_edges += edge + self.tokenizer.encode(
-                        f"{weight:.1f}", add_special_tokens=False
-                    )
-                else:
-                    new_edges += edge
-                if not insert_at_end and i == len(edges) - 1:
-                    new_edges += end_tokens
-                else:
-                    new_edges += sep_tokens
-            new_matches[pos] = new_edges
-        sorted_selection = list(
-            (k, v) for k, v in new_matches.items()
-        )  # type: List[Tuple[int, Tokens]]
-        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
-        if insert_at_end:
-            sentence_tokens += begin_tokens
-            for ss in sorted_selection:
-                sentence_tokens = sentence_tokens + ss[1]
-            sentence_tokens += end_tokens
-        else:
-            offset = 0
-            for ss in sorted_selection:
-                pos = ss[0] + offset
-                sentence_tokens = sentence_tokens[:pos] + ss[1] + sentence_tokens[pos:]
-                offset += len(ss[1])
-        return self.tokenizer.decode(sentence_tokens)
-
-    def insert_selection_at_end_preserve_case(
-        self,
-        sentence: str,
-        selection: Dict[int, Tuple[int, List[Tokens], List[float]]],
-        begin: str = "(",
-        sep: str = ",",
-        end: str = ")",
-        include_weights: bool = False,
-    ) -> str:
-        if len(selection) == 0:
-            return sentence
-        begin_tokens = self.tokenizer.encode(begin, add_special_tokens=False)
-        end_tokens = self.tokenizer.encode(end, add_special_tokens=False)
-        sep_tokens = self.tokenizer.encode(sep, add_special_tokens=False)
-        new_matches = {}
-        knowledge_tokens = []
-        for pos, (_, edges, weights) in selection.items():
-            new_edges = []
-            for i, (edge, weight) in enumerate(zip(edges, weights)):
-                if include_weights:
-                    new_edges += edge + self.tokenizer.encode(
-                        f"{weight:.1f}", add_special_tokens=False
-                    )
-                else:
-                    new_edges += edge
-                new_edges += sep_tokens
-            new_matches[pos] = new_edges
-        sorted_selection = list(
-            (k, v) for k, v in new_matches.items()
-        )  # type: List[Tuple[int, Tokens]]
-        sorted_selection = sorted(sorted_selection, key=lambda x: x[0])
-
-        knowledge_tokens += begin_tokens
-        for ss in sorted_selection:
-            knowledge_tokens = knowledge_tokens + ss[1]
-        knowledge_tokens += end_tokens
-        return sentence + " " + self.tokenizer.decode(knowledge_tokens)
 
     def parallel_tokenize_and_mask(
         self,

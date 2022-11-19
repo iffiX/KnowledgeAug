@@ -30,7 +30,7 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
         )
         self.dataset = ANLIAugmentDataset(
             tokenizer=self.tokenizer,
-            augment_contexts=self.load_augment_contexts(),
+            # augment_contexts=self.load_augment_contexts(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in config.base_type else "splitted",
         )
@@ -83,86 +83,86 @@ class ANLIAugmentTrainer(AugmentBaseTrainer):
             worker_init_fn=set_worker_sharing_strategy,
         )
 
-    def load_augment_contexts(self):
-        dataset = ANLIBaseDataset(tokenizer=None)
-
-        if self.config.augment_method not in (
-            "raw_decode",
-            "standard",
-            "standard_no_symbol",
-            "natural",
-        ):
-            raise ValueError(f"Invalid augment method {self.config.augment_method}")
-
-        def flatten_sublists(list):
-            return [x for sub_list in list for x in sub_list]
-
-        with open(
-            os.path.join(preprocess_cache_dir, f"anli_sample_result_mc.json",), "r",
-        ) as file:
-            raw_contexts = json.load(file)
-            contexts = {}
-            for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                        raw_paths = [
-                            flatten_sublists(
-                                dataset.matcher.sub_paths_to_annotations(
-                                    x,
-                                    decoded_sub_paths=y,
-                                    templates="standard",
-                                    prioritize_original_annotation=True,
-                                )
-                            )
-                            for x, y in zip(raw_path_edges, raw_paths)
-                        ]
-
-                paths = [", ".join(path) + " # " for path in raw_paths]
-                contexts[id] = list(dict.fromkeys(paths))
-
-        # authoritative train context
-        train_contexts = {}
-        with JSONCache(
-            os.path.join(preprocess_cache_dir, f"anli_sample_train_result_mc.json",),
-            generate_func=self.generate_train_paths,
-        ) as cache:
-            print(f"Loaded {len(contexts)} contexts")
-            data = cache.data
-        for id, (raw_paths, raw_path_edges) in data.items():
-            if len(raw_paths) > 0:
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    raw_paths = dataset.matcher.sub_paths_to_annotations(
-                        raw_path_edges,
-                        templates="standard",
-                        prioritize_original_annotation=True,
-                    )
-                train_contexts[id] = [
-                    ", ".join([xx for x in raw_paths for xx in x]) + " # "
-                ]
-            else:
-                train_contexts[id] = []
-
-        return contexts, train_contexts
-
-    def generate_train_paths(self):
-        dataset = ANLIBaseDataset(tokenizer=None)
-        generator = TrainPathGenerator(
-            [
-                (
-                    d["id"],
-                    d["text_question"],
-                    # d["text_answer"],
-                    d["diff_choices"][d["label"]],
-                    d["facts"],
-                )
-                for d in dataset.train_data
-            ],
-            dataset.matcher,
-            max_depth=self.config.max_depth,
-            min_steps=1,  # prevent empty results
-        )
-        return generator.paths
+    # def load_augment_contexts(self):
+    #     dataset = ANLIBaseDataset(tokenizer=None)
+    #
+    #     if self.config.augment_method not in (
+    #         "raw_decode",
+    #         "standard",
+    #         "standard_no_symbol",
+    #         "natural",
+    #     ):
+    #         raise ValueError(f"Invalid augment method {self.config.augment_method}")
+    #
+    #     def flatten_sublists(list):
+    #         return [x for sub_list in list for x in sub_list]
+    #
+    #     with open(
+    #         os.path.join(preprocess_cache_dir, f"anli_sample_result_mc.json",), "r",
+    #     ) as file:
+    #         raw_contexts = json.load(file)
+    #         contexts = {}
+    #         for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
+    #             if self.config.augment_method == "raw_decode":
+    #                 pass
+    #             else:
+    #                 if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
+    #                     raw_paths = [
+    #                         flatten_sublists(
+    #                             dataset.matcher.sub_paths_to_annotations(
+    #                                 x,
+    #                                 decoded_sub_paths=y,
+    #                                 templates="standard",
+    #                                 prioritize_original_annotation=True,
+    #                             )
+    #                         )
+    #                         for x, y in zip(raw_path_edges, raw_paths)
+    #                     ]
+    #
+    #             paths = [", ".join(path) + " # " for path in raw_paths]
+    #             contexts[id] = list(dict.fromkeys(paths))
+    #
+    #     # authoritative train context
+    #     train_contexts = {}
+    #     with JSONCache(
+    #         os.path.join(preprocess_cache_dir, f"anli_sample_train_result_mc.json",),
+    #         generate_func=self.generate_train_paths,
+    #     ) as cache:
+    #         print(f"Loaded {len(contexts)} contexts")
+    #         data = cache.data
+    #     for id, (raw_paths, raw_path_edges) in data.items():
+    #         if len(raw_paths) > 0:
+    #             if self.config.augment_method == "raw_decode":
+    #                 pass
+    #             else:
+    #                 raw_paths = dataset.matcher.sub_paths_to_annotations(
+    #                     raw_path_edges,
+    #                     templates="standard",
+    #                     prioritize_original_annotation=True,
+    #                 )
+    #             train_contexts[id] = [
+    #                 ", ".join([xx for x in raw_paths for xx in x]) + " # "
+    #             ]
+    #         else:
+    #             train_contexts[id] = []
+    #
+    #     return contexts, train_contexts
+    #
+    # def generate_train_paths(self):
+    #     dataset = ANLIBaseDataset(tokenizer=None)
+    #     generator = TrainPathGenerator(
+    #         [
+    #             (
+    #                 d["id"],
+    #                 d["text_question"],
+    #                 # d["text_answer"],
+    #                 d["diff_choices"][d["label"]],
+    #                 d["facts"],
+    #             )
+    #             for d in dataset.train_data
+    #         ],
+    #         dataset.matcher,
+    #         max_depth=self.config.max_depth,
+    #         min_steps=1,  # prevent empty results
+    #     )
+    #     return generator.paths

@@ -14,15 +14,16 @@
             "max_steps": 2,
             "max_depth": 2,
             "max_inference_num": 10000,
-            "beam_size": 3,
-            "return_beam_num": 3,
+            "beam_size": 2,
+            "return_beam_num": 2,
+            "expand_choice_num": 3,
             "optimizer_class": "AdamW",
             "state_delimeter": ", ",
             "seed": 697474,
             "save": 3
         }
     ],
-    "override_saved_config": {"0": {"beam_size": 2, "return_beam_num": 2}},
+    "override_saved_config": {},
     "early_stopping_patience": 15,
     "gpus": [0, 1],
     "stages": [

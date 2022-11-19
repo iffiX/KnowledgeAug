@@ -4,7 +4,6 @@ import sys
 import logging
 import argparse
 import subprocess
-from multiprocessing import get_context
 from encoder.trainer.train import run, export_model
 from encoder.utils.config import *
 

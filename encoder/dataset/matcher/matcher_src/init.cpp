@@ -1,39 +1,14 @@
 #define FMT_HEADER_ONLY
 
-
 #include "matcher.h"
 #include "concept_net.h"
 #include "pybind11/pybind11.h"
 #include "fmt/format.h"
 #include "backward-cpp/backward.hpp"
 
-///#define ENABLE_DEBUG
-//#ifdef ENABLE_DEBUG
-//
-//#include <execinfo.h>
-//#include <csignal>
-//
-//void handler(int sig) {
-//    void *array[20];
-//    size_t size;
-//
-//    // get void*'s for all entries on the stack
-//    size = backtrace(array, 20);
-//
-//    // print out all the frames to stderr
-//    fprintf(stderr, "Error: signal %d:\n", sig);
-//    backtrace_symbols_fd(array, size, STDERR_FILENO);
-//    exit(1);
-//}
-//
-//#endif
-
 namespace py = pybind11;
 
 PYBIND11_MODULE(matcher, m) {
-#ifdef ENABLE_DEBUG
-    signal(SIGSEGV, handler);
-#endif
     backward::SignalHandling sh{};
     py::class_<KnowledgeBase>(m, "KnowledgeBase")
             .def(py::init<>())
@@ -155,26 +130,6 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("target_mask") = std::vector<int>{},
                  py::arg("split_node_minimum_edge_num") = 20,
                  py::arg("split_node_minimum_similarity") = 0.35)
-            .def("match_by_node_embedding", &KnowledgeMatcher::matchByNodeEmbedding,
-                 py::arg("source_sentence"),
-                 py::arg("target_sentence") = std::vector<int>{},
-                 py::arg("source_mask") = std::vector<int>{},
-                 py::arg("target_mask") = std::vector<int>{},
-                 py::arg("disabled_nodes") = std::vector<long>{},
-                 py::arg("max_times") = 100, py::arg("max_depth") = 3, py::arg("seed") = -1,
-                 py::arg("edge_top_k") = -1, py::arg("source_context_range") = 0,
-                 py::arg("trim_path") = true,
-                 py::arg("split_node_minimum_edge_num") = 20,
-                 py::arg("split_node_minimum_similarity") = 0.35,
-                 py::arg("stop_searching_edge_if_similarity_below") = 0,
-                 py::arg("source_context_weight") = 0.2)
-            .def("match_result_paths_to_strings", &KnowledgeMatcher::matchResultPathsToStrings)
-            .def("join_match_results", &KnowledgeMatcher::joinMatchResults)
-            .def("select_paths", &KnowledgeMatcher::selectPaths,
-                 py::arg("match_result"),
-                 py::arg("max_edges"),
-                 py::arg("discard_edges_if_rank_below"),
-                 py::arg("filter_short_accurate_paths") = false)
             .def("save", &KnowledgeMatcher::save,
                  py::arg("archive_path"))
             .def("load", &KnowledgeMatcher::load,
