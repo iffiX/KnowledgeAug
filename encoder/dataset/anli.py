@@ -558,7 +558,15 @@ class ANLIAugmentDataset(ANLIBaseDataset):
             encoded_sentence = self.tokenizer(
                 # [", ".join(self.get_augment_context(split, data["id"]))]
                 # * len(data["choices"]),
-                data["paths"] if len(data["paths"]) == 2 else ["", ""],
+                [
+                    "Path for choice 1: "
+                    + data["paths"][0]
+                    + " Path for choice 2: "
+                    + data["paths"][1]
+                ]
+                * 2
+                if data["paths"]
+                else ["", ""],
                 [
                     "Question: "
                     + self.normalize_question(data["text_question"])

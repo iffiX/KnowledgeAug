@@ -15,6 +15,7 @@
             "save": 5
         }
     ],
+    "override_saved_config": {"0": {"max_seq_length": 512}},
     "early_stopping_patience": 15,
     "gpus": [0, 1],
     "stages": [

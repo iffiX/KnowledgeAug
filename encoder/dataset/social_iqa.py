@@ -80,8 +80,11 @@ class SocialIQABaseDataset:
                 2,
                 3,
             ]
-            for i in range(30):
-                self.test_data[i]["label"] = labels[i] - 1
+            for i in range(len(self.test_data)):
+                if i < 30:
+                    self.test_data[i]["label"] = labels[i] - 1
+                else:
+                    self.test_data[i]["label"] = -1
 
         with PickleCache(
             os.path.join(preprocess_cache_dir, "social_iqa_selected_knowledge.data"),
@@ -111,6 +114,7 @@ class SocialIQABaseDataset:
         self.validate_answer_retreival(
             self.validate_data, question_facts, question_allowed_knowledge
         )
+        self.validate_answer_retreival(self.test_data, None, question_allowed_knowledge)
         self.set_corpus()
 
     def validate_answer_retreival(self, data, facts, allowed_knowledge):
@@ -120,11 +124,12 @@ class SocialIQABaseDataset:
         has_allowed_count = 0
         for d in data:
             words = d["choice_diffs"][d["label"]]
-            if facts[d["id"]]:
-                fact = facts[d["id"]][0]
-                has_fact_count += 1
-                if any(word in fact for word in words):
-                    fact_retrieval_count += 1
+            if facts is not None:
+                if facts[d["id"]]:
+                    fact = facts[d["id"]][0]
+                    has_fact_count += 1
+                    if any(word in fact for word in words):
+                        fact_retrieval_count += 1
             if allowed_knowledge[d["id"]]:
                 allowed = allowed_knowledge[d["id"]]
                 has_allowed_count += 1
@@ -132,11 +137,16 @@ class SocialIQABaseDataset:
                     if any(word in f for word in words):
                         allowed_retrieval_count += 1
                         break
-        print(f"correct choice in fact rate: {fact_retrieval_count / has_fact_count}")
+
+        if facts is not None:
+            print(
+                f"correct choice in fact rate: {fact_retrieval_count / has_fact_count}"
+            )
         print(
             f"correct choice in allowed knowledge rate: {allowed_retrieval_count / has_allowed_count}"
         )
-        print(f"total samples with fact count: {has_fact_count}")
+        if facts is not None:
+            print(f"total samples with fact count: {has_fact_count}")
         print(f"total samples with allowed knowledge count: {has_allowed_count}")
 
     @property
@@ -421,7 +431,7 @@ class SocialIQABaseDataset:
             contexts,
             questions,
             choices,
-            context_similarity=0.25,
+            context_similarity=0.35,
             choice_similarity=0.55,
         )
 
@@ -448,7 +458,7 @@ class SocialIQABaseDataset:
             contexts,
             questions,
             choices,
-            context_similarity=0.25,
+            context_similarity=0.35,
             choice_similarity=0.55,
         )
 
@@ -623,10 +633,19 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
             data["answer"] = answer
         else:
-            encoded_sentence = self.tokenizer(
-                [", ".join(self.augment_contexts.get(data["id"], []))]
-                * len(data["choices"]),
-                [
+            try:
+                if "\n" in data["text_question"]:
+                    data["text_question"] = (
+                        data["text_question"].replace("...\n", "").replace("\n", "")
+                    )
+                    data["choices"] = [
+                        ch.replace("...\n", "").replace("\n", "")[:100]
+                        for ch in data["choices"]
+                    ]
+                seq1 = [", ".join(self.augment_contexts.get(data["id"], []))] * len(
+                    data["choices"]
+                )
+                seq2 = [
                     "Question: "
                     + data["text_question"]
                     + " Choices: "
@@ -634,14 +653,20 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
                     + " Answer: "
                     + ch
                     for ch in data["choices"]
-                ],
-                # [data["text_question"]] * len(data["choices"]),
-                # data["choices"],
-                truncation="only_first",
-                padding="max_length",
-                max_length=self.max_seq_length,
-                return_tensors="pt",
-            )
+                ]
+                encoded_sentence = self.tokenizer(
+                    seq1,
+                    seq2,
+                    # [data["text_question"]] * len(data["choices"]),
+                    # data["choices"],
+                    truncation="only_first",
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    return_tensors="pt",
+                )
+            except:
+                print(seq1)
+                print(seq2)
             data["sentence"] = encoded_sentence.input_ids.unsqueeze(0)
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
