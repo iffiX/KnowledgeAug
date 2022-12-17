@@ -475,6 +475,7 @@ class QASCAugmentDataset(QASCBaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
+        use_augment: bool,
         augment_contexts: Tuple[Dict[str, List[str]], Dict[str, List[str]]],
         max_seq_length: int = 300,
         output_mode: str = "single",
@@ -482,6 +483,7 @@ class QASCAugmentDataset(QASCBaseDataset):
         if output_mode not in ("single", "splitted"):
             raise ValueError(f"Invalid output_mode {output_mode}")
 
+        self.use_augment = use_augment
         self.augment_contexts = augment_contexts
         self.max_seq_length = max_seq_length
         self.output_mode = output_mode
@@ -513,21 +515,25 @@ class QASCAugmentDataset(QASCBaseDataset):
         data = copy.deepcopy(data)
 
         if self.output_mode == "single":
-            encoded_sentence = self.tokenizer(
-                normalize_t5_input(
+            t5_input = normalize_t5_input(
+                (
                     ", ".join(self.get_augment_context(split, data["id"]))
-                    + " \\n "
-                    + data["text_question"]
-                    + " \\n "
-                    + data["text_choices"].replace("\n", " ")
-                ),
+                    if self.use_augment
+                    else ""
+                )
+                + " \\n "
+                + data["text_question"]
+                + " \\n "
+                + data["text_choices"].replace("\n", " ")
+            )
+            encoded_sentence = self.tokenizer(
+                t5_input,
                 padding="max_length",
                 max_length=self.max_seq_length,
                 truncation=True,
                 return_tensors="pt",
             )
-            data["sentence"] = encoded_sentence.input_ids
-            data["mask"] = encoded_sentence.attention_mask
+
             answer = self.tokenizer.encode(
                 normalize_t5_input(data["text_answer"]),
                 padding="max_length",
@@ -538,26 +544,55 @@ class QASCAugmentDataset(QASCBaseDataset):
             # Use -100 to focus on training the answer part, rather than pad
             # tokens
             answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+
+            data["sentence"] = encoded_sentence.input_ids
+            data["mask"] = encoded_sentence.attention_mask
             data["answer"] = answer
-        else:
-            encoded_sentence = self.tokenizer(
-                [", ".join(self.get_augment_context(split, data["id"]))]
-                * len(data["choices"]),
-                [
-                    " Q: "
-                    + self.normalize_question(data["text_question"])
-                    + " A: "
-                    + ch
-                    for ch in data["choices"]
-                ],
-                truncation="only_first",
-                padding="max_length",
-                max_length=self.max_seq_length,
-                return_tensors="pt",
+            data["t5_input"] = t5_input
+            data["t5_answer"] = normalize_t5_input(data["text_answer"])
+            data["t5_label"] = normalize_t5_input(
+                ["(A)", "(B)", "(C)", "(D)"][data["label"]]
             )
+        else:
+            if self.use_augment:
+                segments = [
+                    [", ".join(self.get_augment_context(split, data["id"]))]
+                    * len(data["choices"]),
+                    [
+                        " Q: "
+                        + self.normalize_question(data["text_question"])
+                        + " A: "
+                        + ch
+                        for ch in data["choices"]
+                    ],
+                ]
+                encoded_sentence = self.tokenizer(
+                    *segments,
+                    truncation="only_first",
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    return_tensors="pt",
+                )
+            else:
+                segments = [
+                    [self.normalize_question(data["text_question"])]
+                    * len(data["choices"]),
+                    data["choices"],
+                ]
+                encoded_sentence = self.tokenizer(
+                    *segments,
+                    truncation="only_first",
+                    padding="max_length",
+                    max_length=self.max_seq_length,
+                    return_tensors="pt",
+                )
             data["sentence"] = encoded_sentence.input_ids.unsqueeze(0)
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
+            data["bert_input"] = [
+                [segments[0][i], segments[1][i]] for i in range(len(segments[0]))
+            ]
+            data["bert_label"] = data["label"]
         return data
 
     def normalize_question(self, question):

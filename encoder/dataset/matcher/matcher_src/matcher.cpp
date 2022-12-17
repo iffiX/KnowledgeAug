@@ -5,7 +5,6 @@
 #include "fmt/format.h"
 #include "xtensor/xio.hpp"
 #include "xtensor/xsort.hpp"
-#include "xtensor/xview.hpp"
 #include "xtensor/xadapt.hpp"
 #include "xtensor/xtensor.hpp"
 #include "highfive/H5File.hpp"
@@ -141,13 +140,13 @@ vector<vector<int>> Trie::matchForStart(const vector<int> &sentence, size_t star
 //#endif
     if (not allowSubMatch and not result.empty())
         result.erase(result.begin(), result.begin() + result.size() - 1);
-    return move(result);
+    return std::move(result);
 }
 
 unordered_map<size_t, vector<vector<int>>> Trie::matchForAll(const vector<int> &sentence, bool allowSubMatch) const {
     unordered_map<size_t, vector<vector<int>>> result;
     for (size_t i = 0; i < sentence.size();) {
-        vector<vector<int>> matches = move(matchForStart(sentence, i, allowSubMatch));
+        vector<vector<int>> matches = std::move(matchForStart(sentence, i, allowSubMatch));
         if (not matches.empty()) {
             size_t match_size = matches.front().size();
             result.emplace(i, matches);
@@ -155,7 +154,7 @@ unordered_map<size_t, vector<vector<int>>> Trie::matchForAll(const vector<int> &
         } else
             i++;
     }
-    return move(result);
+    return std::move(result);
 }
 
 void KnowledgeBase::clearDisabledEdges() {
@@ -251,7 +250,7 @@ vector<long> KnowledgeBase::findNodes(const vector<string> &nod, bool quiet) con
         }
 
     }
-    return move(ids);
+    return std::move(ids);
 }
 
 vector<Edge>
@@ -300,13 +299,13 @@ KnowledgeBase::findEdges(const vector<string> &source_nodes,
                 result.emplace_back(make_tuple(-1, -1, -1, 0, ""));
         }
     }
-    return move(result);
+    return std::move(result);
 }
 
 unordered_set<long> KnowledgeBase::getNodeNeighbors(long node) const {
     if (adjacency.find(node) == adjacency.end())
         throw invalid_argument("Node doesn't exist");
-    return move(adjacency.at(node));
+    return std::move(adjacency.at(node));
 }
 
 vector<Edge> KnowledgeBase::getEdges(long source, long target) const {
@@ -331,7 +330,7 @@ vector<Edge> KnowledgeBase::getEdges(long source, long target) const {
         }
     }
 
-    return move(result);
+    return std::move(result);
 }
 
 vector<Edge> KnowledgeBase::getEdgesBidirection(long node1, long node2) const {
@@ -346,7 +345,7 @@ vector<Edge> KnowledgeBase::getEdgesBidirection(long node1, long node2) const {
             if (not isEdgeDisabled[edgeIndex] and get<2>(edges[edgeIndex]) == node1)
                 result.push_back(edges[edgeIndex]);
     }
-    return move(result);
+    return std::move(result);
 }
 
 const vector<string> &KnowledgeBase::getNodes() const {
@@ -768,12 +767,12 @@ void KnowledgeBase::loadNodeToIndex() {
 
 template<typename T>
 cista::raw::vector<T> KnowledgeBase::vector2ArchiveVector(const vector<T> &vec) {
-    return move(cista::raw::vector<T>(vec.begin(), vec.end()));
+    return std::move(cista::raw::vector<T>(vec.begin(), vec.end()));
 }
 
 template<typename T>
 vector<T> KnowledgeBase::archiveVector2Vector(const cista::raw::vector<T> &vec) {
-    return move(vector<T>(vec.begin(), vec.end()));
+    return std::move(vector<T>(vec.begin(), vec.end()));
 }
 
 KnowledgeMatcher::KnowledgeMatcher(const KnowledgeBase &knowledgeBase) {
@@ -814,8 +813,8 @@ float KnowledgeMatcher::computeFBetaScore(long node, const vector<long> &targetN
                                           float beta) const {
     unordered_map<pair<long, long>, float, PairHash> similarityCache;
     unordered_map<long, float> targetNodeCounts;
-    for (long node : targetNodes)
-        targetNodeCounts[node] += 1;
+    for (long targetNode : targetNodes)
+        targetNodeCounts[targetNode] += 1;
     return computeFBetaScoreWithCache(node, targetNodeCounts, similarityCache, beta);
 }
 
@@ -882,7 +881,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
 #ifdef DEBUG
         cout << "Source match result is empty, return" << endl;
 #endif
-        return move(PathResult());
+        return std::move(PathResult());
     }
 
     PathResult result;
@@ -1170,7 +1169,7 @@ KnowledgeMatcher::findShortestPath(const vector<int> &sourceSentence,
                 get<2>(result).emplace_back(vector<long>{get<2>(lastEdge)});
         }
     }
-    return move(result);
+    return std::move(result);
 }
 
 KnowledgeMatcher::ChoiceResult
@@ -1366,11 +1365,24 @@ KnowledgeMatcher::findAvailableChoices(const vector<long> &visitedNodes,
         cout << endl;
     }
 #endif
-    return move(result);
+    return std::move(result);
+}
+
+vector<vector<vector<int>>>
+KnowledgeMatcher::subPathsToAnnotations(const vector<vector<Edge>> &subPaths) const {
+    vector<vector<vector<int>>> result;
+    for (auto &subPath : subPaths) {
+        result.emplace_back(vector<vector<int>>{});
+        auto &subPathAnnotations = result.back();
+        for (auto &edge : subPath) {
+            subPathAnnotations.emplace_back(edgeToAnnotation(edge));
+        }
+    }
+    return std::move(result);
 }
 
 vector<vector<string>>
-KnowledgeMatcher::subPathsToAnnotations(const vector<vector<Edge>> &subPaths,
+KnowledgeMatcher::subPathsToStringAnnotations(const vector<vector<Edge>> &subPaths,
                                         const vector<string> &relationshipTemplates,
                                         bool prioritizeOriginalAnnotation,
                                         bool lowerCase) const {
@@ -1382,14 +1394,14 @@ KnowledgeMatcher::subPathsToAnnotations(const vector<vector<Edge>> &subPaths,
     vector<vector<string>> result;
     for (auto &subPath : subPaths) {
         result.emplace_back(vector<string>{});
-        auto &subPathAnnotations = result.back();
+        auto &subPathStringAnnotations = result.back();
         for (auto &edge : subPath) {
             if (prioritizeOriginalAnnotation and get<4>(edge).length() > 0) {
                 string annotation = get<4>(edge);
                 if (lowerCase)
                     for_each(annotation.begin(), annotation.end(), [](char &c){ c = tolower(c); });
                 // remove leading, trailing and extra white spaces
-                subPathAnnotations.emplace_back(regex_replace(annotation, regex("^ +| +$|( ) +"), "$1"));
+                subPathStringAnnotations.emplace_back(regex_replace(annotation, regex("^ +| +$|( ) +"), "$1"));
             }
             else {
                 string annotation = fmt::format(relationshipTemplates[get<1>(edge)],
@@ -1397,11 +1409,11 @@ KnowledgeMatcher::subPathsToAnnotations(const vector<vector<Edge>> &subPaths,
                                                 kb.nodes[get<2>(edge)]);
                 if (lowerCase)
                     for_each(annotation.begin(), annotation.end(), [](char &c){ c = tolower(c); });
-                subPathAnnotations.emplace_back(annotation);
+                subPathStringAnnotations.emplace_back(annotation);
             }
         }
     }
-    return move(result);
+    return std::move(result);
 }
 
 KnowledgeMatcher::SourceAndTargetNodes
@@ -1445,7 +1457,7 @@ KnowledgeMatcher::matchSourceAndTargetNodes(const vector<int> &sourceSentence,
         get<0>(result).push_back(sn);
     for (auto &tn : targetNodesSet)
         get<1>(result).push_back(tn);
-    return move(result);
+    return std::move(result);
 }
 
 void KnowledgeMatcher::save(const string &archivePath) const {
@@ -1463,12 +1475,12 @@ size_t KnowledgeMatcher::PairHash::operator()(const pair<T1, T2> &pair) const {
 
 vector<int> KnowledgeMatcher::edgeToAnnotation(size_t edgeIndex) const {
     const Edge &edge = kb.edges[edgeIndex];
-    return move(edgeToAnnotation(edge));
+    return std::move(edgeToAnnotation(edge));
 }
 
 string KnowledgeMatcher::edgeToStringAnnotation(size_t edgeIndex) const {
     const Edge &edge = kb.edges[edgeIndex];
-    return move(edgeToStringAnnotation(edge));
+    return std::move(edgeToStringAnnotation(edge));
 }
 
 vector<int> KnowledgeMatcher::edgeToAnnotation(const Edge &edge) const {
@@ -1477,7 +1489,7 @@ vector<int> KnowledgeMatcher::edgeToAnnotation(const Edge &edge) const {
     edgeAnno.insert(edgeAnno.end(), rel.begin(), rel.end());
     auto &tar = kb.tokenizedNodes[get<2>(edge)];
     edgeAnno.insert(edgeAnno.end(), tar.begin(), tar.end());
-    return move(edgeAnno);
+    return std::move(edgeAnno);
 }
 
 string KnowledgeMatcher::edgeToStringAnnotation(const Edge &edge) const {
@@ -1488,7 +1500,7 @@ string KnowledgeMatcher::edgeToStringAnnotation(const Edge &edge) const {
     edgeAnno += " ";
     auto &tar = kb.nodes[get<2>(edge)];
     edgeAnno.insert(edgeAnno.end(), tar.begin(), tar.end());
-    return move(edgeAnno);
+    return std::move(edgeAnno);
 }
 
 size_t KnowledgeMatcher::componentIntersection(const unordered_map<long, float> &sourceNodes,

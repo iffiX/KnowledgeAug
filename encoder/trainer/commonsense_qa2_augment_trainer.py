@@ -1,6 +1,4 @@
 import os
-import re
-import json
 import logging
 import itertools
 import warnings
@@ -22,7 +20,7 @@ from encoder.dataset.commonsense_qa2 import (
 )
 from encoder.prompter.commonsense_qa2 import CommonsenseQA2Prompter
 from encoder.searcher.searcher import ScaleSerpSearcher
-from encoder.utils.file import JSONCache
+from encoder.utils.file import PickleCache
 from encoder.utils.config import CommonsenseQA2AugmentTrainConfig, fix_missing
 from encoder.utils.settings import (
     proxies,
@@ -41,10 +39,100 @@ from .utils import (
 class AugmentGenerator:
     instance = None
 
-    def __init__(self):
+    def __init__(self, max_depth, augment_method, augment_use_parts):
         AugmentGenerator.instance = self
+        self.max_depth = max_depth
+        self.augment_method = augment_method
+        self.augment_use_parts = augment_use_parts
         self.dataset = CommonsenseQA2BaseDataset(tokenizer=None)
         self.prompter = CommonsenseQA2Prompter(self.dataset)
+        self.contexts = {}
+
+        self.lowered_knowledge_to_knowledge = {}
+        self.id_to_searches = {}
+        self.id_to_knowledge_keys = {}
+        self.knowledge_key_to_knowledge = {}
+        self.top_facts_indices = {}
+
+        self.contexts = {}
+        with PickleCache(
+            os.path.join(
+                preprocess_cache_dir, f"commonsense_qa2_raw_sample_result.data"
+            ),
+            generate_func=self.generate,
+        ) as cache:
+            external_knowledge, raw_contexts = cache.data
+            self.dataset.matcher.add_external_knowledge(external_knowledge)
+            for id_, sample_result in raw_contexts.items():
+                self.contexts[id_] = []
+                for raw_path, raw_path_edges in sample_result:
+                    all_path_edges = []
+                    # only use the first level (corresponds to sample config)
+                    for sub_path, sub_path_edges, _ in zip(
+                        raw_path, raw_path_edges, range(1)
+                    ):
+
+                        for decoded_edge, edge in zip(sub_path, sub_path_edges):
+                            if (
+                                edge[0] < self.dataset.matcher.composite_start
+                                and edge[2] < self.dataset.matcher.composite_start
+                            ):
+                                if (
+                                    augment_use_parts == "all"
+                                    or augment_use_parts == "only_non_composite"
+                                ):
+                                    all_path_edges.append(
+                                        self.dataset.matcher.sub_paths_to_annotations(
+                                            [[edge]],
+                                            templates=augment_method,
+                                            use_parts="all",
+                                            prioritize_original_annotation=True,
+                                        )[0][0]
+                                    )
+                            else:
+                                if augment_use_parts == "all":
+                                    all_path_edges.append(
+                                        self.dataset.matcher.sub_paths_to_annotations(
+                                            [[edge]],
+                                            templates=augment_method,
+                                            use_parts="all",
+                                            prioritize_original_annotation=True,
+                                        )[0][0]
+                                    )
+                                elif augment_use_parts == "only_composite":
+                                    assert "related to" in decoded_edge
+                                    node0_end = decoded_edge.find("related to")
+                                    node1_start = node0_end + len("related to")
+                                    node0 = decoded_edge[:node0_end]
+                                    node1 = decoded_edge[node1_start:]
+                                    node0 = node0.strip(" ")
+                                    node1 = node1.strip(" ")
+                                    if edge[0] >= self.dataset.matcher.composite_start:
+                                        all_path_edges.append(node0)
+                                    else:
+                                        all_path_edges.append(node1)
+
+                    if len(all_path_edges) > 0:
+                        self.contexts[id_].append(", ".join(all_path_edges))
+
+        empty_count = 0
+        for data in chain(
+            self.dataset.original_train_data,
+            self.dataset.validate_data,
+            self.dataset.test_data,
+        ):
+            if not self.contexts[data["id"]]:
+                empty_count += 1
+        total = (
+            len(self.dataset.original_train_data)
+            + len(self.dataset.validate_data)
+            + len(self.dataset.test_data)
+        )
+        logging.info(
+            f"{empty_count} contexts are empty, percent {empty_count * 100 / total:.2f} %"
+        )
+
+    def generate(self):
         queries = []
         query_ids = []
         for data in chain(
@@ -67,20 +155,15 @@ class AugmentGenerator:
             [(key, knowledge.lower()) for key, knowledge in sr]
             for sr in searcher.search_result
         ]
-        self.lowered_knowledge_to_knowledge = {
-            knowledge.lower(): knowledge
-            for sr in searcher.search_result
-            for _, knowledge in sr
-        }
+        # self.lowered_knowledge_to_knowledge = {
+        #     knowledge.lower(): knowledge
+        #     for sr in searcher.search_result
+        #     for _, knowledge in sr
+        # }
         external_knowledge = [knowledge for sr in search_result for _, knowledge in sr]
         self.dataset.matcher.add_external_knowledge(external_knowledge)
 
         embedder = Embedder()
-
-        self.contexts = {}
-        self.id_to_searches = {}
-        self.id_to_knowledge_keys = {}
-        self.knowledge_key_to_knowledge = {}
 
         for data in chain(
             self.dataset.original_train_data,
@@ -101,7 +184,6 @@ class AugmentGenerator:
         logging.info("Computing embeddings")
         search_embeddings = self.embed_dict(self.id_to_searches, embedder)
         knowledge_keys_embeddings = self.embed_dict(self.id_to_knowledge_keys, embedder)
-        self.top_facts_indices = {}
         for id_ in self.id_to_searches:
             if id_ in search_embeddings and id_ in knowledge_keys_embeddings:
                 topk = t.topk(
@@ -124,29 +206,14 @@ class AugmentGenerator:
         logging.info("Finding best paths")
 
         ctx = get_context("fork")
+        contexts = {}
         with ctx.Pool() as pool:
             for id_, result in tqdm(
                 pool.imap_unordered(self.generate_paths, self.id_to_searches.keys()),
                 total=len(self.id_to_searches),
             ):
-                self.contexts[id_] = result
-
-        empty_count = 0
-        for data in chain(
-            self.dataset.original_train_data,
-            self.dataset.validate_data,
-            self.dataset.test_data,
-        ):
-            if not self.contexts[data["id"]]:
-                empty_count += 1
-        total = (
-            len(self.dataset.original_train_data)
-            + len(self.dataset.validate_data)
-            + len(self.dataset.test_data)
-        )
-        logging.info(
-            f"{empty_count} contexts are empty, percent {empty_count * 100 / total:.2f} %"
-        )
+                contexts[id_] = result
+        return external_knowledge, contexts
 
     @staticmethod
     def generate_paths(id_):
@@ -162,30 +229,22 @@ class AugmentGenerator:
                 best_knowledge_key = self.id_to_knowledge_keys[id_][idx]
                 best_knowledge = self.knowledge_key_to_knowledge[best_knowledge_key]
 
-                _, raw_path_edges, *__ = self.dataset.matcher.find_shortest_path(
+                raw_path, raw_path_edges, *__ = self.dataset.matcher.find_shortest_path(
                     source_sentence=", ".join(starts),
                     target_sentence=", ".join(search),
                     intermediate_nodes=[best_knowledge],
-                    max_depth_for_each_node=2,
+                    max_depth_for_each_node=self.max_depth,
                 )
-                raw_paths = self.dataset.matcher.sub_paths_to_annotations(
-                    raw_path_edges,
-                    templates="standard",
-                    prioritize_original_annotation=False,
-                )
-                # only the first level (corresponds to sample config)
-                path = ", ".join([xx for x in raw_paths for xx in x]).replace(
-                    best_knowledge, self.lowered_knowledge_to_knowledge[best_knowledge]
-                )
-                if len(path) == 0:
+                if len(raw_path) == 0:
                     continue
-                result.append(path + " # ")
+                result.append((raw_path, raw_path_edges))
         return id_, result
 
-    def embed_dict(self, dict, embedder):
+    @staticmethod
+    def embed_dict(dictionary, embedder):
         all_strings = []
         all_ids = []
-        for id_, strings in dict.items():
+        for id_, strings in dictionary.items():
             all_strings += strings
             all_ids += [id_] * len(strings)
 
@@ -221,16 +280,19 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
             proxies=proxies,
             mirror=huggingface_mirror,
         )
-        with JSONCache(
-            os.path.join(preprocess_cache_dir, f"commonsense_qa2_sample_result.json"),
-            generate_func=self.load_augment_contexts,
-        ) as cache:
-            self.dataset = CommonsenseQA2AugmentDataset(
-                tokenizer=self.tokenizer,
-                augment_contexts=cache.data,
-                max_seq_length=config.max_seq_length,
-                output_mode="single" if "t5-" in config.base_type else "splitted",
-            )
+
+        self.dataset = CommonsenseQA2AugmentDataset(
+            tokenizer=self.tokenizer,
+            use_augment=self.config.use_augment,
+            augment_contexts=self.load_augment_contexts(
+                self.config.max_depth,
+                self.config.augment_method,
+                self.config.augment_use_parts,
+            ),
+            max_seq_length=config.max_seq_length,
+            output_mode="single" if "t5-" in config.base_type else "splitted",
+        )
+
         if "t5-" in config.base_type:
             self.model = T5ForConditionalGeneration.from_pretrained(
                 config.base_type,
@@ -453,5 +515,5 @@ class CommonsenseQA2AugmentTrainer(pl.LightningModule):
             ],
         )
 
-    def load_augment_contexts(self):
-        return AugmentGenerator().contexts
+    def load_augment_contexts(self, max_depth, augment_method, augment_use_parts):
+        return AugmentGenerator(max_depth, augment_method, augment_use_parts).contexts

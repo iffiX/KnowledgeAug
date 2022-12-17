@@ -4,6 +4,7 @@ from typing import List, Any
 from transformers import get_constant_schedule
 from torch.optim.optimizer import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
+from ..dataset.matcher.base import BaseMatcher, Edge
 from ..dataset.base import collate_function_dict_to_batch_encoding, dict_iter
 
 
@@ -44,6 +45,41 @@ def collate_and_filter_outputs(outputs, order_by_ids: List[Any] = None):
         results = [lr[2] for lr in list_of_results]
     batch = collate_function_dict_to_batch_encoding([lr[1] for lr in list_of_results])
     return batch, results
+
+
+def join_sub_path_annotations(sub_path_annotations: List[List[str]]):
+    # Each str here is an annotation for an edge
+    return [", ".join(s) for s in sub_path_annotations]
+
+
+def filter_augment_parts(
+    raw_paths: List[List[str]],
+    raw_paths_edges: List[List[List[Edge]]],
+    matcher: BaseMatcher,
+    augment_use_levels: int,
+    augment_method: str,
+    augment_use_parts: str,
+    recover_edge_from_raw_decoded_paths: bool = False,
+):
+    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
+        # If there is at least one path and that path is not empty
+        raw_paths = [
+            join_sub_path_annotations(
+                matcher.sub_paths_to_annotations(
+                    y[:augment_use_levels],
+                    decoded_sub_paths=x[:augment_use_levels]
+                    if recover_edge_from_raw_decoded_paths or augment_use_parts != "all"
+                    else None,
+                    templates=augment_method,
+                    use_parts=augment_use_parts,
+                    prioritize_original_annotation=True,
+                )
+            )
+            for x, y in zip(raw_paths, raw_paths_edges)
+            if len(y) > 0
+        ]
+
+    return raw_paths
 
 
 def get_cosine_with_hard_restarts_schedule_with_warmup(

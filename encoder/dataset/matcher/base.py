@@ -151,6 +151,14 @@ class BaseMatcher:
         self.standard_relationship_templates = [
             self.STANDARD_TEMPLATES[rel] for rel in matcher.kb.relationships
         ]
+        self.standard_t5_relationship_templates = [
+            re.sub(
+                r"<(.+)>", r"<extra_id_0> \1 <extra_id_1>", self.STANDARD_TEMPLATES[rel]
+            )
+            .replace("(", " [ ")
+            .replace(")", " ] ")
+            for rel in matcher.kb.relationships
+        ]
         self.standard_no_symbol_templates = [
             re.sub("\(|\)|<|>", "", self.STANDARD_TEMPLATES[rel])
             for rel in matcher.kb.relationships
@@ -302,6 +310,7 @@ class BaseMatcher:
         sub_paths: List[List[Edge]],
         decoded_sub_paths: List[str] = None,
         templates: Union[str, List[str]] = "natural",
+        use_parts: str = "all",
         prioritize_original_annotation: bool = True,
         lower_case: bool = True,
     ) -> List[List[str]]:
@@ -310,69 +319,114 @@ class BaseMatcher:
         use decoded_sub_paths to recover original information
         """
         if isinstance(templates, str):
-            if templates == "natural":
+            if templates == "raw_decode":
+                pass
+            elif templates == "natural":
                 templates = self.natural_relationship_templates
             elif templates == "standard":
                 templates = self.standard_relationship_templates
+                prioritize_original_annotation = False
+            elif templates == "standard_t5":
+                templates = self.standard_t5_relationship_templates
                 prioritize_original_annotation = False
             elif templates == "standard_no_symbol":
                 templates = self.standard_no_symbol_templates
                 prioritize_original_annotation = False
             else:
                 raise ValueError(f"Unknown templates configuration: {templates}")
-        if decoded_sub_paths is None:
-            return self.matcher.sub_paths_to_annotations(
-                sub_paths,
-                templates,
-                prioritize_original_annotation=prioritize_original_annotation,
-                lower_case=lower_case,
-            )
+        if use_parts not in ("all", "only_composite", "only_non_composite"):
+            raise ValueError(f"Unknown use parts: {use_parts}")
+        if use_parts == "all" and decoded_sub_paths is None:
+            if templates == "raw_decode":
+                list_of_sub_path_annotation_tokens = self.matcher.sub_paths_to_annotations(
+                    sub_paths
+                )  # type: List[List[List[int]]]
+                return [
+                    self.tokenizer.batch_decode(sub_path_tokens)
+                    for sub_path_tokens in list_of_sub_path_annotation_tokens
+                ]
+            else:
+                return self.matcher.sub_paths_to_string_annotations(
+                    sub_paths,
+                    templates,
+                    prioritize_original_annotation=prioritize_original_annotation,
+                    lower_case=lower_case,
+                )
         else:
+            if use_parts != "all" and decoded_sub_paths is None:
+                raise ValueError(
+                    "When use_parts != all decoded sub paths must be provided"
+                )
             formatted_sub_paths = []
-            for path, decoded_path in zip(sub_paths, decoded_sub_paths):
-                formatted_path = []
+            for sub_path, decoded_sub_path in zip(sub_paths, decoded_sub_paths):
+                formatted_sub_path = []
                 start = 0
-                for edge_idx, edge in enumerate(path):
+                for edge_idx, edge in enumerate(sub_path):
                     # because the period will only appear in the last composite node
                     # or between edges
-                    # If not found, -1 is fine for using the whole string
-                    decoded_edge_end = decoded_path.find(", ", start)
+                    # If not found, this means we are at the last edge
+                    # For last edge always use the whole remaining string
+                    decoded_edge_end = decoded_sub_path.find(", ", start)
 
-                    if edge_idx == len(path) - 1:
-                        decoded_edge_end = len(decoded_path)
-                    decoded_edge = decoded_path[start:decoded_edge_end]
+                    if edge_idx == len(sub_path) - 1:
+                        decoded_edge_end = len(decoded_sub_path)
+
+                    decoded_edge = decoded_sub_path[start:decoded_edge_end]
                     start = decoded_edge_end + len(", ")
                     if (
                         edge[0] < self.composite_start
                         and edge[2] < self.composite_start
                     ):
-                        formatted_path.append(
-                            self.matcher.sub_paths_to_annotations(
-                                [[edge]],
-                                templates,
-                                prioritize_original_annotation=prioritize_original_annotation,
-                                lower_case=lower_case,
-                            )[0][0]
-                        )
+                        if use_parts in ("all", "only_non_composite"):
+                            if templates == "raw_decode":
+                                formatted_sub_path.append(decoded_edge)
+                            else:
+                                formatted_sub_path.append(
+                                    self.matcher.sub_paths_to_string_annotations(
+                                        [[edge]],
+                                        templates,
+                                        prioritize_original_annotation=prioritize_original_annotation,
+                                        lower_case=lower_case,
+                                    )[0][0]
+                                )
                     else:
                         assert self.matcher.kb.relationships[edge[1]] == "RelatedTo"
-                        first_node = decoded_edge[
-                            : decoded_edge.find("related to")
-                        ].strip(" ")
-                        second_node = decoded_edge[
-                            decoded_edge.find("related to") + len("related to ") :
-                        ].strip(" ")
-                        if lower_case:
-                            formatted_path.append(
-                                templates[edge[1]]
-                                .format(first_node, second_node)
-                                .lower()
-                            )
-                        else:
-                            formatted_path.append(
-                                templates[edge[1]].format(first_node, second_node)
-                            )
-                formatted_sub_paths.append(formatted_path)
+                        if use_parts == "all":
+                            if templates == "raw_decode":
+                                formatted_sub_path.append(decoded_edge)
+                            else:
+                                first_node = decoded_edge[
+                                    : decoded_edge.find("related to")
+                                ].strip(" ")
+                                second_node = decoded_edge[
+                                    decoded_edge.find("related to")
+                                    + len("related to ") :
+                                ].strip(" ")
+                                if lower_case:
+                                    formatted_sub_path.append(
+                                        templates[edge[1]]
+                                        .format(first_node, second_node)
+                                        .lower()
+                                    )
+                                else:
+                                    formatted_sub_path.append(
+                                        templates[edge[1]].format(
+                                            first_node, second_node
+                                        )
+                                    )
+                        elif use_parts == "only_composite":
+                            first_node = decoded_edge[
+                                : decoded_edge.find("related to")
+                            ].strip(" ")
+                            second_node = decoded_edge[
+                                decoded_edge.find("related to") + len("related to ") :
+                            ].strip(" ")
+                            if edge[0] >= self.composite_start:
+                                formatted_sub_path.append(first_node)
+                            else:
+                                formatted_sub_path.append(second_node)
+
+                formatted_sub_paths.append(formatted_sub_path)
             return formatted_sub_paths
 
     def match_source_and_target_nodes(

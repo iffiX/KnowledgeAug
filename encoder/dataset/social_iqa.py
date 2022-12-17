@@ -569,6 +569,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
     def __init__(
         self,
         tokenizer: PreTrainedTokenizerBase,
+        use_augment: bool,
         augment_contexts: Dict[str, List[str]],
         max_seq_length: int = 300,
         output_mode: str = "single",
@@ -576,6 +577,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
         if output_mode not in ("single", "splitted"):
             raise ValueError(f"Invalid output_mode {output_mode}")
 
+        self.use_augment = use_augment
         self.augment_contexts = augment_contexts
         self.max_seq_length = max_seq_length
         self.output_mode = output_mode
@@ -606,68 +608,94 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
         data = copy.deepcopy(data)
 
         if self.output_mode == "single":
-            encoded_sentence = self.tokenizer(
-                normalize_t5_input(
+            t5_input = normalize_t5_input(
+                (
                     ", ".join(self.augment_contexts.get(data["id"], []))
-                    + " \\n "
-                    + data["text_question"]
-                    + " \\n "
-                    + data["text_choices"].replace("\n", " ")
-                ),
+                    if self.use_augment
+                    else ""
+                )
+                + " \\n "
+                + data["text_question"].replace("...\n", "").replace("\n", "")
+                + " \\n "
+                + data["text_choices"].replace("...\n", "").replace("\n", "")
+            )
+            encoded_sentence = self.tokenizer(
+                t5_input,
                 padding="max_length",
                 max_length=self.max_seq_length,
                 truncation=True,
                 return_tensors="pt",
             )
-            data["sentence"] = encoded_sentence.input_ids
-            data["mask"] = encoded_sentence.attention_mask
+
             answer = self.tokenizer.encode(
                 normalize_t5_input(data["text_answer"]),
                 padding="max_length",
-                max_length=16,
+                max_length=32,
                 truncation=True,
                 return_tensors="pt",
             )
             # Use -100 to focus on training the answer part, rather than pad
             # tokens
             answer.masked_fill_(answer == self.tokenizer.pad_token_id, -100)
+
+            data["sentence"] = encoded_sentence.input_ids
+            data["mask"] = encoded_sentence.attention_mask
             data["answer"] = answer
+            data["t5_input"] = t5_input
+            data["t5_answer"] = normalize_t5_input(data["text_answer"])
+            data["t5_label"] = normalize_t5_input(
+                ["(A)", "(B)", "(C)", "(D)"][data["label"]]
+            )
         else:
-            try:
-                if "\n" in data["text_question"]:
-                    data["text_question"] = (
-                        data["text_question"].replace("...\n", "").replace("\n", "")
+            if self.use_augment:
+                try:
+                    if "\n" in data["text_question"]:
+                        data["text_question"] = (
+                            data["text_question"].replace("...\n", "").replace("\n", "")
+                        )
+                        data["choices"] = [
+                            ch.replace("...\n", "").replace("\n", "")[:100]
+                            for ch in data["choices"]
+                        ]
+                    seq1 = [", ".join(self.augment_contexts.get(data["id"], []))] * len(
+                        data["choices"]
                     )
-                    data["choices"] = [
-                        ch.replace("...\n", "").replace("\n", "")[:100]
+                    seq2 = [
+                        "Question: "
+                        + data["text_question"]
+                        + " Choices: "
+                        + ", ".join(data["choices"])
+                        + " Answer: "
+                        + ch
                         for ch in data["choices"]
                     ]
-                seq1 = [", ".join(self.augment_contexts.get(data["id"], []))] * len(
-                    data["choices"]
-                )
-                seq2 = [
-                    "Question: "
-                    + data["text_question"]
-                    + " Choices: "
-                    + ", ".join(data["choices"])
-                    + " Answer: "
-                    + ch
-                    for ch in data["choices"]
+                    segments = [seq1, seq2]
+                    encoded_sentence = self.tokenizer(
+                        *segments,
+                        truncation="only_first",
+                        padding="max_length",
+                        max_length=self.max_seq_length,
+                        return_tensors="pt",
+                    )
+                except Exception as e:
+                    raise e
+            else:
+                segments = [
+                    [data["text_question"]] * len(data["choices"]),
+                    data["choices"],
                 ]
                 encoded_sentence = self.tokenizer(
-                    seq1,
-                    seq2,
-                    # [data["text_question"]] * len(data["choices"]),
-                    # data["choices"],
+                    *segments,
                     truncation="only_first",
                     padding="max_length",
                     max_length=self.max_seq_length,
                     return_tensors="pt",
                 )
-            except:
-                print(seq1)
-                print(seq2)
             data["sentence"] = encoded_sentence.input_ids.unsqueeze(0)
             data["mask"] = encoded_sentence.attention_mask.unsqueeze(0)
             data["type_ids"] = encoded_sentence.token_type_ids.unsqueeze(0)
+            data["bert_input"] = [
+                [segments[0][i], segments[1][i]] for i in range(len(segments[0]))
+            ]
+            data["bert_label"] = data["label"]
         return data

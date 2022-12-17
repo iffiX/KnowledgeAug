@@ -4,7 +4,7 @@ import sys
 import logging
 import argparse
 import subprocess
-from encoder.trainer.train import run, export_model
+from encoder.trainer.train import run, export_model, export_bert_input, export_t5_input
 from encoder.utils.config import *
 
 logging.root.setLevel(logging.INFO)
@@ -38,6 +38,14 @@ if __name__ == "__main__":
         "export_model", help="Start exporting model."
     )
 
+    p_export_t5_input = subparsers.add_parser(
+        "export_t5_input", help="Start exporting inputs for T5 model."
+    )
+
+    p_export_bert_input = subparsers.add_parser(
+        "export_bert_input", help="Start exporting inputs for BERT like model."
+    )
+
     p_train.add_argument(
         "--config", type=str, required=True, help="Path of the config file.",
     )
@@ -75,11 +83,35 @@ if __name__ == "__main__":
     )
 
     p_export_model.add_argument(
-        "--stage", type=int, default=None, help="Stage number to run.",
+        "--stage", type=int, required=True, help="Stage number to run.",
     )
 
     p_export_model.add_argument(
-        "--path", type=str, default=None, help="Save destination.",
+        "--path", type=str, required=True, help="Save destination.",
+    )
+
+    p_export_t5_input.add_argument(
+        "--config", type=str, required=True, help="Path of the config file.",
+    )
+
+    p_export_t5_input.add_argument(
+        "--stage", type=int, required=True, help="Stage number to run.",
+    )
+
+    p_export_t5_input.add_argument(
+        "--path", type=str, required=True, help="Save destination.",
+    )
+
+    p_export_bert_input.add_argument(
+        "--config", type=str, required=True, help="Path of the config file.",
+    )
+
+    p_export_bert_input.add_argument(
+        "--stage", type=int, required=True, help="Stage number to run.",
+    )
+
+    p_export_bert_input.add_argument(
+        "--path", type=str, required=True, help="Save destination.",
     )
 
     p_generate = subparsers.add_parser(
@@ -105,9 +137,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
     if args.command in ("train", "validate", "test", "evaluate_model"):
         config = load_config(args.config)
-        assert len(config.stages) == len(
-            config.configs
-        ), "Pipeline stage number must be equal to the number of stage configs."
 
         # Copied from pytorch lightning ddp plugin
         if args.stage is None:
@@ -126,11 +155,16 @@ if __name__ == "__main__":
             else:  # Script called as `python -m a.b.c`
                 command = [sys.executable, "-m", __main__.__spec__.name] + sys.argv[1:]
 
+            logging.info(f"Total stage num: {len(config.stages)}")
             for i in range(len(config.stages)):
-                logging.info(f"Running stage {i} type: {config.stages[i]}")
-                logging.info("=" * 100)
-                process = subprocess.Popen(command + ["--stage", str(i)])
-                process.wait()
+                if not config.configs[i].skip:
+                    logging.info(f"Running stage {i} type: {config.stages[i]}")
+                    logging.info("=" * 100)
+                    process = subprocess.Popen(command + ["--stage", str(i)])
+                    process.wait()
+                else:
+                    logging.info(f"Skipping stage {i} type: {config.stages[i]}")
+                    logging.info("=" * 100)
         else:
             assert (
                 0 <= args.stage < len(config.stages)
@@ -150,9 +184,15 @@ if __name__ == "__main__":
 
     elif args.command == "export_model":
         config = load_config(args.config)
-        assert len(config.stages) == len(
-            config.configs
-        ), "Pipeline stage number must be equal to the number of stage configs."
         export_model(config, args.stage, args.path)
+
+    elif args.command == "export_bert_input":
+        config = load_config(args.config)
+        export_bert_input(config, args.stage, args.path)
+
+    elif args.command == "export_t5_input":
+        config = load_config(args.config)
+        export_t5_input(config, args.stage, args.path)
+
     elif args.command == "generate":
         generate_config(args.stages.split(","), args.output, args.print)

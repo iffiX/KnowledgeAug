@@ -1,5 +1,6 @@
 import os
 import json
+import itertools
 import torch as t
 from torch.utils.data import DataLoader, RandomSampler
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
@@ -9,7 +10,7 @@ from encoder.utils.file import JSONCache
 from encoder.utils.config import OpenBookQAAugmentTrainConfig
 from encoder.utils.settings import preprocess_cache_dir
 from .augment_base_trainer import AugmentBaseTrainer
-from .utils import set_worker_sharing_strategy
+from .utils import set_worker_sharing_strategy, filter_augment_parts
 
 
 class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
@@ -27,6 +28,7 @@ class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
         )
         self.dataset = OpenBookQAAugmentDataset(
             tokenizer=self.tokenizer,
+            use_augment=self.config.use_augment,
             augment_contexts=self.load_augment_contexts(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in self.config.base_type else "splitted",
@@ -68,92 +70,88 @@ class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
     def load_augment_contexts(self):
         dataset = OpenBookQABaseDataset(tokenizer=None)
 
-        if self.config.augment_method not in (
-            "raw_decode",
-            "standard",
-            "standard_no_symbol",
-            "natural",
-        ):
-            raise ValueError(f"Invalid augment method {self.config.augment_method}")
-
-        with open(
-            os.path.join(
-                preprocess_cache_dir,
-                f"openbook_qa_sample_result_{self.config.sample_type}.json",
-            ),
-            "r",
-        ) as file:
-            raw_contexts = json.load(file)
+        if self.config.augment_method == "original_facts":
             contexts = {}
-            for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                        raw_paths = [
-                            dataset.matcher.sub_paths_to_annotations(
-                                x,
-                                templates="standard",
-                                prioritize_original_annotation=True,
-                            )[0]
-                            for x in raw_path_edges
-                            if len(x) > 0
-                        ]
-                paths = [", ".join(path) + " # " for path in raw_paths]
-                if self.config.sample_type == "mc":
-                    contexts[id] = list(dict.fromkeys(paths))[:4]
-                else:
-                    contexts[id] = list(dict.fromkeys(paths))
-
-        # authoritative train context
-        train_contexts = {}
-        with JSONCache(
-            os.path.join(
-                preprocess_cache_dir,
-                f"openbook_qa_sample_train_result_{self.config.sample_type}.json",
-            ),
-            generate_func=self.generate_train_paths,
-        ) as cache:
-            print(f"Loaded {len(contexts)} contexts")
-            data = cache.data
-        for id, (raw_paths, raw_path_edges) in data.items():
-            if len(raw_paths) > 0:
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    raw_paths = dataset.matcher.sub_paths_to_annotations(
-                        raw_path_edges,
-                        templates="standard",
-                        prioritize_original_annotation=True,
+            train_contexts = {}
+            for data in dataset.train_data:
+                train_contexts[data["id"]] = contexts[data["id"]] = [
+                    ", ".join(data["original_facts"]) + " # "
+                ]
+            for data in itertools.chain(dataset.validate_data, dataset.test_data):
+                contexts[data["id"]] = [", ".join(data["original_facts"]) + " # "]
+        else:
+            contexts = {}
+            with open(
+                os.path.join(
+                    preprocess_cache_dir,
+                    f"openbook_qa_sample_result_{self.config.sample_type}.json",
+                ),
+                "r",
+            ) as file:
+                raw_contexts = json.load(file)
+                for id_, (raw_paths, raw_paths_edges, *_) in raw_contexts.items():
+                    raw_paths = filter_augment_parts(
+                        raw_paths,
+                        raw_paths_edges,
+                        dataset.matcher,
+                        1,
+                        self.config.augment_method,
+                        self.config.augment_use_parts,
+                        False,
                     )
-                # only use the first level
-                train_contexts[id] = [", ".join(raw_paths[0]) + " # "]
-                # train_contexts[id] = [
-                #     ", ".join([xx for x in raw_paths for xx in x]) + " # "
-                # ]
-            else:
-                train_contexts[id] = []
+                    paths = [", ".join(path) + " # " for path in raw_paths]
+                    if self.config.sample_type == "mc":
+                        # Only use top 4 facts for multiple choice scenario
+                        contexts[id_] = list(dict.fromkeys(paths))[:4]
+                    else:
+                        contexts[id_] = list(dict.fromkeys(paths))
 
-        for split_name, split in zip(
-            ("train", "validate", "test"),
-            (dataset.train_data, dataset.validate_data, dataset.test_data,),
-        ):
-            total, count = 0, 0
-            for data in split:
-                if data["id"] in contexts:
-                    total += 1
-                    best_length = 0
-                    for path in contexts[data["id"]]:
-                        length = 0
-                        for fact in data["original_facts"]:
-                            if fact.replace(" ,", ",") in path:
-                                length += 1
-                            else:
-                                break
-                        if best_length < length:
-                            best_length = length
-                    count += best_length
-            print(f"Average retrieval length of {split_name}: {count / total}")
+            # authoritative train context
+            train_contexts = {}
+            with JSONCache(
+                os.path.join(
+                    preprocess_cache_dir,
+                    f"openbook_qa_sample_train_result_{self.config.sample_type}.json",
+                ),
+                generate_func=self.generate_train_paths,
+            ) as cache:
+                print(f"Loaded {len(contexts)} contexts")
+                data = cache.data
+            for id_, (train_path, train_path_edges) in data.items():
+                if len(train_path) > 0:
+                    if self.config.augment_method == "raw_decode":
+                        pass
+                    else:
+                        train_path = dataset.matcher.sub_paths_to_annotations(
+                            train_path_edges,
+                            templates=self.config.augment_method,
+                            prioritize_original_annotation=True,
+                        )
+                    # only use the first level
+                    train_contexts[id_] = [", ".join(train_path[0]) + " # "]
+                else:
+                    train_contexts[id_] = []
+
+            for split_name, split in zip(
+                ("train", "validate", "test"),
+                (dataset.train_data, dataset.validate_data, dataset.test_data,),
+            ):
+                total, count = 0, 0
+                for data in split:
+                    if data["id"] in contexts:
+                        total += 1
+                        best_length = 0
+                        for path in contexts[data["id"]]:
+                            length = 0
+                            for fact in data["original_facts"]:
+                                if fact.replace(" ,", ",") in path:
+                                    length += 1
+                                else:
+                                    break
+                            if best_length < length:
+                                best_length = length
+                        count += best_length
+                print(f"Average retrieval length of {split_name}: {count / total}")
 
         return contexts, train_contexts
 

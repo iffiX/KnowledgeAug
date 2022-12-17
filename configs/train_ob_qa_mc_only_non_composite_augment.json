@@ -4,24 +4,25 @@
             "accumulate_grad_batches": 2,
             "base_type": "microsoft/deberta-v3-large",
             "batch_size": 8,
-            "epochs": 10,
+            "epochs": 5,
             "l2_regularization": 0,
             "learning_rate": 5e-6,
             "max_seq_length": 200,
             "max_depth": 2,
-            "augment_method": "raw_decode",
+            "sample_type": "mc",
+            "augment_method": "standard",
+            "augment_use_parts": "only_non_composite",
             "scheduler_warmup_proportion": 0,
             "load": false,
             "optimizer_class": "AdamW",
             "seed": 697474,
-            "save": 5
+            "save": true
         }
     ],
-    "override_saved_config": {"0": {"max_seq_length": 512}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
-        "social_iqa_augment"
+        "openbook_qa_augment"
     ],
-    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_social_iqa_augment"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_ob_qa_mc_only_non_composite_augment"
 }

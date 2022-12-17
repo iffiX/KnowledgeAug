@@ -7,12 +7,10 @@ from encoder.dataset.social_iqa import (
     SocialIQABaseDataset,
     SocialIQAAugmentDataset,
 )
-from encoder.dataset.sample import TrainPathGenerator
-from encoder.utils.file import PickleCache, JSONCache
 from encoder.utils.config import SocialIQAAugmentTrainConfig
 from encoder.utils.settings import preprocess_cache_dir
 from .augment_base_trainer import AugmentBaseTrainer
-from .utils import set_worker_sharing_strategy
+from .utils import set_worker_sharing_strategy, filter_augment_parts
 
 
 class SocialIQAAugmentTrainer(AugmentBaseTrainer):
@@ -30,6 +28,7 @@ class SocialIQAAugmentTrainer(AugmentBaseTrainer):
         )
         self.dataset = SocialIQAAugmentDataset(
             tokenizer=self.tokenizer,
+            use_augment=self.config.use_augment,
             augment_contexts=self.load_augment_contexts(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in config.base_type else "splitted",
@@ -83,36 +82,28 @@ class SocialIQAAugmentTrainer(AugmentBaseTrainer):
         ):
             raise ValueError(f"Invalid augment method {self.config.augment_method}")
 
-        def flatten_sublists(list):
-            return [x for sub_list in list for x in sub_list]
-
         contexts = {}
         with open(
             os.path.join(preprocess_cache_dir, f"social_iqa_sample_result_sc.json",),
             "r",
         ) as file:
             raw_contexts = json.load(file)
-            for id, (raw_paths, raw_path_edges, answers) in raw_contexts.items():
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                        raw_paths = [
-                            flatten_sublists(
-                                dataset.matcher.sub_paths_to_annotations(
-                                    x,
-                                    decoded_sub_paths=y,
-                                    templates="standard",
-                                    prioritize_original_annotation=True,
-                                )
-                            )
-                            for x, y in zip(raw_path_edges, raw_paths)
-                        ]
+            for id, (raw_paths, raw_paths_edges, answers) in raw_contexts.items():
+                raw_paths = filter_augment_parts(
+                    raw_paths,
+                    raw_paths_edges,
+                    dataset.matcher,
+                    1,
+                    self.config.augment_method,
+                    self.config.augment_use_parts,
+                    True,
+                )
 
                 paths = []
                 added_answer = set()
                 for path, answer in zip(raw_paths, answers):
                     if answer not in added_answer:
+                        # Only use the first path to that answer
                         paths.append(", ".join(path[:1]) + " # ")
                         added_answer.add(answer)
                 # paths = [", ".join(path[:1]) + " # " for path in raw_paths]

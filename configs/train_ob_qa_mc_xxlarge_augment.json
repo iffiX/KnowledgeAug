@@ -1,0 +1,32 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 8,
+            "base_type": "microsoft/deberta-v2-xxlarge-mnli",
+            "batch_size": 1,
+            "epochs": 20,
+            "l2_regularization": 0,
+            "learning_rate": 3e-6,
+            "max_seq_length": 200,
+            "max_depth": 2,
+            "sample_type": "mc",
+            "augment_method": "standard",
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "AdamW",
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 15,
+    "precision": 16,
+    "deepspeed": true,
+    "deepspeed_configs": {
+        "stage": 2
+    },
+    "gpus": [0, 1],
+    "stages": [
+        "openbook_qa_augment"
+    ],
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_ob_qa_mc_xxlarge_augment"
+}

@@ -5,6 +5,7 @@ from typing import *
 
 
 class AugmentBaseConfig(BaseModel):
+    skip: bool = False
     load: bool = False
     seed: int = 42
     save: Union[bool, int] = True
@@ -27,6 +28,7 @@ class AugmentBaseConfig(BaseModel):
 
 
 class SampleBaseConfig(BaseModel):
+    skip: bool = False
     load: bool = False
     seed: int = 0
     save: Union[bool, int] = True
@@ -91,7 +93,9 @@ class OpenBookQAAugmentTrainConfig(AugmentBaseConfig):
     load_prefetch_per_worker: Optional[int] = 2
 
     max_depth: int = 2
+    use_augment: bool = True
     augment_method: str = "standard"
+    augment_use_parts: str = "all"
     sample_type: str = "mc"
 
 
@@ -138,7 +142,9 @@ class QASCAugmentTrainConfig(AugmentBaseConfig):
     load_prefetch_per_worker: Optional[int] = 2
 
     max_depth: int = 2
+    use_augment: bool = True
     augment_method: str = "raw_decode"
+    augment_use_parts: str = "all"
     sample_type: str = "sc"
 
 
@@ -148,32 +154,10 @@ class CommonsenseQA2AugmentTrainConfig(AugmentBaseConfig):
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
 
-
-class ANLISingleChoiceSampleTrainConfig(SampleBaseConfig):
-    load_worker_num: Optional[int] = 0
-    load_prefetch_per_worker: Optional[int] = 2
-
-    max_steps: int = 3
     max_depth: int = 2
-    beam_size: int = 5
-    return_beam_num: int = 5
-    min_logits: Union[float, None] = None
-    max_inference_num: int = 20000
-    inference_batch_size: int = 128
-    state_delimeter: str = ", "
-    end_of_reasoning: str = "END_OF_REASONING"
-    negative_samples: int = 3
-    negative_shuffle_seed: int = 42
-
-
-class ANLIAugmentTrainConfig(AugmentBaseConfig):
-    max_seq_length: int = 256
-    generate_length: int = 20
-    load_worker_num: Optional[int] = 0
-    load_prefetch_per_worker: Optional[int] = 2
-
-    max_depth: int = 2
+    use_augment: bool = True
     augment_method: str = "raw_decode"
+    augment_use_parts: str = "all"
 
 
 class SocialIQASingleChoiceSampleTrainConfig(SampleBaseConfig):
@@ -202,7 +186,9 @@ class SocialIQAAugmentTrainConfig(AugmentBaseConfig):
     load_prefetch_per_worker: Optional[int] = 2
 
     max_depth: int = 2
+    use_augment: bool = True
     augment_method: str = "raw_decode"
+    augment_use_parts: str = "all"
 
 
 class Config(BaseModel):
@@ -226,13 +212,13 @@ class Config(BaseModel):
     stages: List[str] = []
     configs: List[
         Union[
-            CommonsenseQA2AugmentTrainConfig,
             OpenBookQASingleChoiceSampleTrainConfig,
             OpenBookQAMultipleChoiceSampleTrainConfig,
             OpenBookQAAugmentTrainConfig,
             QASCSingleChoiceSampleTrainConfig,
             QASCMultipleChoiceSampleTrainConfig,
             QASCAugmentTrainConfig,
+            CommonsenseQA2AugmentTrainConfig,
             SocialIQASingleChoiceSampleTrainConfig,
             SocialIQAAugmentTrainConfig,
         ]
@@ -241,17 +227,15 @@ class Config(BaseModel):
 
 def stage_name_to_config(name: str, config_dict: dict = None):
     stage_name_to_config_map = {
-        "anli_sc_sample": ANLISingleChoiceSampleTrainConfig,
-        "anli_augment": ANLIAugmentTrainConfig,
-        "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainConfig,
-        "social_iqa_augment": SocialIQAAugmentTrainConfig,
-        "commonsense_qa2_augment": CommonsenseQA2AugmentTrainConfig,
         "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainConfig,
         "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainConfig,
         "openbook_qa_augment": OpenBookQAAugmentTrainConfig,
         "qasc_sc_sample": QASCSingleChoiceSampleTrainConfig,
         "qasc_mc_sample": QASCMultipleChoiceSampleTrainConfig,
         "qasc_augment": QASCAugmentTrainConfig,
+        "commonsense_qa2_augment": CommonsenseQA2AugmentTrainConfig,
+        "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainConfig,
+        "social_iqa_augment": SocialIQAAugmentTrainConfig,
     }
     if name in stage_name_to_config_map:
         config_dict = config_dict or {}
@@ -272,6 +256,9 @@ def load_config(path: str) -> Config:
             early_stopping_patience=config_dict.get("early_stopping_patience", 100),
             working_directory=config_dict["working_directory"],
         )
+        assert len(config_dict["stages"]) == len(
+            config_dict["configs"]
+        ), "Invalid config, pipeline stage number must be equal to the number of stage configs."
         for s, c in zip(config_dict["stages"], config_dict["configs"]):
             config.stages.append(s)
             config.configs.append(stage_name_to_config(s, c))

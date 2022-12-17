@@ -1,3 +1,4 @@
+import re
 from typing import List
 from torch import nn
 from transformers import MarianMTModel, MarianTokenizer
@@ -171,5 +172,4 @@ class Translator(nn.Module):
 
 def normalize_t5_input(text):
     text = text.lower()
-    text = re.sub(r"'(.*)'", r"\1", text)
     return text

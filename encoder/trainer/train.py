@@ -1,11 +1,10 @@
 import re
 import os
+import json
 import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
-from .anli_augment_trainer import ANLIAugmentTrainer
-from .anli_sample_trainer import ANLISingleChoiceSampleTrainer
 from .social_iqa_augment_trainer import SocialIQAAugmentTrainer
 from .social_iqa_sample_trainer import SocialIQASingleChoiceSampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
@@ -21,8 +20,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 
 stage_name_to_trainer_map = {
-    "anli_sc_sample": ANLISingleChoiceSampleTrainer,
-    "anli_augment": ANLIAugmentTrainer,
     "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainer,
     "social_iqa_augment": SocialIQAAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,
@@ -349,3 +346,96 @@ def export_model(config: Config, stage_index: int, path: str):
     stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
     state_dict = stage_trainer.export_model().state_dict()
     t.save({k: v.cpu() for k, v in state_dict.items()}, path)
+
+
+def export_bert_input(config: Config, stage_index: int, path: str):
+    logging.info("Exporting BERT like input.")
+
+    # execute stages
+    stage = config.stages[stage_index]
+    stage_config = config.configs[stage_index]
+
+    stage_trainer = stage_name_to_trainer(stage, stage_config, path, False)
+    dataset = stage_trainer.dataset
+    if dataset.output_mode != "splitted":
+        logging.info("Note: Config is not for BERT like models, corrected.")
+        dataset.output_mode = "splitted"
+
+    def generate(split):
+        results = []
+        if split == "train":
+            length = len(dataset.train_data)
+        elif split == "validate":
+            length = len(dataset.validate_data)
+        else:
+            length = len(dataset.test_data)
+        for i in range(length):
+            generated = dataset.generator(i, split)
+            results.append(
+                {
+                    "input": generated["bert_input"],
+                    "label": generated["bert_label"],
+                    "id": generated["id"],
+                }
+            )
+        return results
+
+    if hasattr(dataset, "train_data"):
+        with open(os.path.join(path, "train_for_bert.json"), "w") as file:
+            json.dump(generate("train"), file, indent=2)
+
+    if hasattr(dataset, "validate_data"):
+        with open(os.path.join(path, "validate_for_bert.json"), "w") as file:
+            json.dump(generate("validate"), file, indent=2)
+
+    if hasattr(dataset, "test_data"):
+        with open(os.path.join(path, "test_for_bert.json"), "w") as file:
+            json.dump(generate("test"), file, indent=2)
+    logging.info("Export finished")
+
+
+def export_t5_input(config: Config, stage_index: int, path: str):
+    logging.info("Exporting T5 input.")
+
+    # execute stages
+    stage = config.stages[stage_index]
+    stage_config = config.configs[stage_index]
+
+    stage_trainer = stage_name_to_trainer(stage, stage_config, path, False)
+    dataset = stage_trainer.dataset
+    if dataset.output_mode != "single":
+        logging.info("Note: Config is not using T5, corrected.")
+        dataset.output_mode = "single"
+
+    def generate(split):
+        results = []
+        if split == "train":
+            length = len(dataset.train_data)
+        elif split == "validate":
+            length = len(dataset.validate_data)
+        else:
+            length = len(dataset.test_data)
+        for i in range(length):
+            generated = dataset.generator(i, split)
+            results.append(
+                {
+                    "input": generated["t5_input"],
+                    "answer": generated["t5_answer"],
+                    "label": generated["t5_label"],
+                    "id": generated["id"],
+                }
+            )
+        return results
+
+    if hasattr(dataset, "train_data"):
+        with open(os.path.join(path, "train_for_t5.json"), "w") as file:
+            json.dump(generate("train"), file, indent=2)
+
+    if hasattr(dataset, "validate_data"):
+        with open(os.path.join(path, "validate_for_t5.json"), "w") as file:
+            json.dump(generate("validate"), file, indent=2)
+
+    if hasattr(dataset, "test_data"):
+        with open(os.path.join(path, "test_for_t5.json"), "w") as file:
+            json.dump(generate("test"), file, indent=2)
+    logging.info("Export finished")

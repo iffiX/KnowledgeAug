@@ -2,6 +2,7 @@ import os
 import json
 import random
 import hashlib
+import itertools
 import torch as t
 from torch.utils.data import DataLoader, RandomSampler
 from encoder.dataset.base import collate_function_dict_to_batch_encoding
@@ -11,7 +12,7 @@ from encoder.utils.file import JSONCache
 from encoder.utils.config import QASCAugmentTrainConfig
 from encoder.utils.settings import preprocess_cache_dir
 from .augment_base_trainer import AugmentBaseTrainer
-from .utils import set_worker_sharing_strategy
+from .utils import set_worker_sharing_strategy, filter_augment_parts
 
 
 class QASCAugmentTrainer(AugmentBaseTrainer):
@@ -29,6 +30,7 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
         )
         self.dataset = QASCAugmentDataset(
             tokenizer=self.tokenizer,
+            use_augment=self.config.use_augment,
             augment_contexts=self.load_augment_contexts(),
             max_seq_length=config.max_seq_length,
             output_mode="single" if "t5-" in self.config.base_type else "splitted",
@@ -64,8 +66,8 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
 
     def val_dataloader(self):
         return DataLoader(
-            # dataset=self.dataset.validate_dataset,
-            dataset=self.dataset.test_dataset_with_reference,
+            dataset=self.dataset.validate_dataset,
+            # dataset=self.dataset.test_dataset_with_reference,
             **self.dataloader_args,
         )
 
@@ -83,77 +85,71 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
         dataset = QASCBaseDataset(tokenizer=None)
         dataset.matcher.add_qasc_facts(train_and_validate=False)
 
-        if self.config.augment_method not in (
-            "raw_decode",
-            "standard",
-            "standard_no_symbol",
-            "natural",
-        ):
-            raise ValueError(f"Invalid augment method {self.config.augment_method}")
-
-        def flatten_sublists(list):
-            return [x for sub_list in list for x in sub_list]
-
-        with open(
-            os.path.join(
-                preprocess_cache_dir,
-                f"qasc_sample_result_{self.config.sample_type}.json",
-            ),
-            "r",
-        ) as file:
-            raw_contexts = json.load(file)
+        if self.config.augment_method == "original_facts":
             contexts = {}
-            for id, (raw_paths, raw_path_edges, *_) in raw_contexts.items():
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    if len(raw_paths) > 0 and len(raw_paths[0]) > 0:
-                        raw_paths = [
-                            flatten_sublists(
-                                dataset.matcher.sub_paths_to_annotations(
-                                    x[:2],
-                                    decoded_sub_paths=y[:2],
-                                    templates="standard",
-                                    prioritize_original_annotation=True,
-                                )
-                            )
-                            for x, y in zip(raw_path_edges, raw_paths)
-                        ]
-
-                paths = [", ".join(path) + " # " for path in raw_paths]
-                if self.config.sample_type == "sc":
-                    random.Random(
-                        int(hashlib.sha1(id.encode("utf-8")).hexdigest(), 16)
-                        & 0xFFFFFFFF
-                    ).shuffle(paths)
-                contexts[id] = list(dict.fromkeys(paths))
-
-        # authoritative train context
-        train_contexts = {}
-        with JSONCache(
-            os.path.join(
-                preprocess_cache_dir,
-                f"qasc_sample_train_result_{self.config.sample_type}.json",
-            ),
-            generate_func=self.generate_train_paths,
-        ) as cache:
-            print(f"Loaded {len(contexts)} contexts")
-            data = cache.data
-        for id, (raw_paths, raw_path_edges) in data.items():
-            if len(raw_paths) > 0:
-                if self.config.augment_method == "raw_decode":
-                    pass
-                else:
-                    raw_paths = dataset.matcher.sub_paths_to_annotations(
-                        raw_path_edges,
-                        templates="standard",
-                        prioritize_original_annotation=True,
-                    )
-                train_contexts[id] = [
-                    ", ".join([xx for x in raw_paths for xx in x]) + " # "
+            train_contexts = {}
+            for data in dataset.train_data:
+                train_contexts[data["id"]] = contexts[data["id"]] = [
+                    ", ".join(data["original_facts"]) + " # "
                 ]
-            else:
-                train_contexts[id] = []
+            for data in itertools.chain(dataset.validate_data, dataset.test_data):
+                contexts[data["id"]] = [", ".join(data["original_facts"]) + " # "]
+        else:
+            contexts = {}
+            with open(
+                os.path.join(
+                    preprocess_cache_dir,
+                    f"qasc_sample_result_{self.config.sample_type}.json",
+                ),
+                "r",
+            ) as file:
+                raw_contexts = json.load(file)
+                for id, (raw_paths, raw_paths_edges, *_) in raw_contexts.items():
+                    raw_paths = filter_augment_parts(
+                        raw_paths,
+                        raw_paths_edges,
+                        dataset.matcher,
+                        2,
+                        self.config.augment_method,
+                        self.config.augment_use_parts,
+                        True,
+                    )
+
+                    paths = [", ".join(path) + " # " for path in raw_paths]
+                    if self.config.sample_type == "sc":
+                        # Make sure there is enough randomness
+                        random.Random(
+                            int(hashlib.sha1(id.encode("utf-8")).hexdigest(), 16)
+                            & 0xFFFFFFFF
+                        ).shuffle(paths)
+                    contexts[id] = list(dict.fromkeys(paths))
+
+            # authoritative train context
+            train_contexts = {}
+            with JSONCache(
+                os.path.join(
+                    preprocess_cache_dir,
+                    f"qasc_sample_train_result_{self.config.sample_type}.json",
+                ),
+                generate_func=self.generate_train_paths,
+            ) as cache:
+                print(f"Loaded {len(contexts)} contexts")
+                data = cache.data
+            for id, (train_path, train_path_edges) in data.items():
+                if len(train_path) > 0:
+                    if self.config.augment_method == "raw_decode":
+                        pass
+                    else:
+                        train_path = dataset.matcher.sub_paths_to_annotations(
+                            train_path_edges,
+                            templates=self.config.augment_method,
+                            prioritize_original_annotation=True,
+                        )
+                    train_contexts[id] = [
+                        ", ".join([xx for x in train_path for xx in x]) + " # "
+                    ]
+                else:
+                    train_contexts[id] = []
 
         return contexts, train_contexts
 

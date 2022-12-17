@@ -1,0 +1,63 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 4,
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 2,
+            "epochs": 5,
+            "l2_regularization": 0,
+            "learning_rate": 5e-6,
+            "max_seq_length": 300,
+            "max_depth": 2,
+            "sample_type": "sc",
+            "augment_method": "natural",
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "AdamW",
+            "seed": 697474,
+            "save": true
+        },
+        {
+            "accumulate_grad_batches": 4,
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 2,
+            "epochs": 5,
+            "l2_regularization": 0,
+            "learning_rate": 5e-6,
+            "max_seq_length": 300,
+            "max_depth": 2,
+            "sample_type": "sc",
+            "augment_method": "standard",
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "AdamW",
+            "seed": 697474,
+            "save": true
+        },
+        {
+            "accumulate_grad_batches": 4,
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 2,
+            "epochs": 5,
+            "l2_regularization": 0,
+            "learning_rate": 5e-6,
+            "max_seq_length": 300,
+            "max_depth": 2,
+            "sample_type": "sc",
+            "augment_method": "standard_no_symbol",
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "AdamW",
+            "seed": 697474,
+            "save": true
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "qasc_augment",
+        "qasc_augment",
+        "qasc_augment"
+    ],
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_qasc_sc_other_augment"
+}

@@ -1,27 +1,28 @@
 {
     "configs": [
         {
-            "accumulate_grad_batches": 4,
+            "accumulate_grad_batches": 2,
             "base_type": "microsoft/deberta-v3-large",
-            "batch_size": 2,
-            "epochs": 10,
+            "batch_size": 8,
+            "epochs": 5,
             "l2_regularization": 0,
             "learning_rate": 5e-6,
-            "max_seq_length": 300,
+            "max_seq_length": 200,
             "max_depth": 2,
-            "sample_type": "sc",
             "augment_method": "raw_decode",
+            "augment_use_parts": "only_composite",
             "scheduler_warmup_proportion": 0,
             "load": false,
             "optimizer_class": "AdamW",
             "seed": 697474,
-            "save": 3
+            "save": true
         }
     ],
+    "override_saved_config": {"0": {"max_seq_length": 512}},
     "early_stopping_patience": 15,
     "gpus": [0],
     "stages": [
-        "qasc_augment"
+        "social_iqa_augment"
     ],
-    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_qasc_sc_augment"
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_social_iqa_only_composite_augment"
 }

@@ -80,10 +80,6 @@ PYBIND11_MODULE(matcher, m) {
                                         kb.nodes.size(), kb.relationships.size(), kb.edges.size());
                  });
 
-    py::class_<KnowledgeMatcher::MatchResult>(m, "MatchResult")
-            .def(pybind11::init<>())
-            .def_readonly("target_node_num", &KnowledgeMatcher::MatchResult::targetNodeNum);
-
     py::class_<KnowledgeMatcher>(m, "KnowledgeMatcher")
             .def(py::init<const KnowledgeBase &>())
             .def(py::init<const std::string &>())
@@ -119,6 +115,8 @@ PYBIND11_MODULE(matcher, m) {
                  py::arg("filter_composite_nodes_by_f_beta") = false,
                  py::arg("minimum_f_beta") = 0)
             .def("sub_paths_to_annotations", &KnowledgeMatcher::subPathsToAnnotations,
+                 py::arg("sub_paths"))
+            .def("sub_paths_to_string_annotations", &KnowledgeMatcher::subPathsToStringAnnotations,
                  py::arg("sub_paths"),
                  py::arg("relationship_templates"),
                  py::arg("prioritize_original_annotation") = true,
