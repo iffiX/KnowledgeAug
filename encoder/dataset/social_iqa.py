@@ -212,6 +212,7 @@ class SocialIQABaseDataset:
         approximately_correct = 0
         missing = 0
         answers = {}
+        choices = [normalize_t5_input(x) for x in ["(A)", "(B)", "(C)"]]
         for i in range(tokens.shape[0]):
             answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
             ref_answer_tensor = batch["answer"][i]
@@ -228,13 +229,11 @@ class SocialIQABaseDataset:
             if answer == ref_answer:
                 correct += 1
                 answers[batch["id"][i]] = True
-            elif answer not in batch["choices"][i]:
+            elif answer not in choices:
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
-                    possible_matches = difflib.get_close_matches(
-                        answer, batch["choices"][i], n=1
-                    )
+                    possible_matches = difflib.get_close_matches(answer, choices, n=1)
                     if len(possible_matches) == 0:
                         missing += 1
 
@@ -274,6 +273,7 @@ class SocialIQABaseDataset:
 
     def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
+        choices = [normalize_t5_input(x) for x in ["(A)", "(B)", "(C)"]]
         with open_file_with_create_directories(
             os.path.join(directory, "social_iqa.lst"), "w"
         ) as file:
@@ -285,7 +285,7 @@ class SocialIQABaseDataset:
             answer_keys = ["1\n", "2\n", "3\n"]
             for answer_tokens, preprocessed in zip(tokens, self.test_data):
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
-                for i, choice in enumerate(preprocessed["choices"]):
+                for i, choice in enumerate(choices):
                     if answer == choice:
                         file.write(answer_keys[i])
                         break
@@ -628,7 +628,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             )
 
             answer = self.tokenizer.encode(
-                normalize_t5_input(data["text_answer"]),
+                normalize_t5_input(["(A)", "(B)", "(C)"][data["label"]]),
                 padding="max_length",
                 max_length=32,
                 truncation=True,
@@ -643,9 +643,7 @@ class SocialIQAAugmentDataset(SocialIQABaseDataset):
             data["answer"] = answer
             data["t5_input"] = t5_input
             data["t5_answer"] = normalize_t5_input(data["text_answer"])
-            data["t5_label"] = normalize_t5_input(
-                ["(A)", "(B)", "(C)", "(D)"][data["label"]]
-            )
+            data["t5_label"] = normalize_t5_input(["(A)", "(B)", "(C)"][data["label"]])
         else:
             if self.use_augment:
                 try:

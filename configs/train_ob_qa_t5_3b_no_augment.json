@@ -1,0 +1,30 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 1,
+            "base_type": "t5-3b",
+            "batch_size": 32,
+            "epochs": 10,
+            "l2_regularization": 0,
+            "learning_rate": 1e-4,
+            "max_seq_length": 100,
+            "max_depth": 2,
+            "use_augment": false,
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "Adafactor",
+            "seed": 697474,
+            "save": false,
+            "device_map": {
+                "0": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+                "1": [12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+            }
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "openbook_qa_augment"
+    ],
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_ob_qa_t5_3b_no_augment"
+}

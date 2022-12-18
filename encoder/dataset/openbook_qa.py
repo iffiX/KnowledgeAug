@@ -139,6 +139,7 @@ class OpenBookQABaseDataset:
         approximately_correct = 0
         missing = 0
         answers = {}
+        choices = [normalize_t5_input(x) for x in ["(A)", "(B)", "(C)", "(D)"]]
         for i in range(tokens.shape[0]):
             answer = self.tokenizer.decode(tokens[i], skip_special_tokens=True)
             ref_answer_tensor = batch["answer"][i]
@@ -155,13 +156,11 @@ class OpenBookQABaseDataset:
             if answer == ref_answer:
                 correct += 1
                 answers[batch["id"][i]] = True
-            elif answer not in batch["choices"][i]:
+            elif answer not in choices:
                 if self.match_closest_when_no_equal:
                     # Gestalt Pattern Matching
                     # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
-                    possible_matches = difflib.get_close_matches(
-                        answer, batch["choices"][i], n=1
-                    )
+                    possible_matches = difflib.get_close_matches(answer, choices, n=1)
                     if len(possible_matches) == 0:
                         missing += 1
 
@@ -199,6 +198,7 @@ class OpenBookQABaseDataset:
 
     def generate_test_result_tokens(self, tokens: t.Tensor, directory: str):
         missing = 0
+        choices = [normalize_t5_input(x) for x in ["(A)", "(B)", "(C)", "(D)"]]
         with open_file_with_create_directories(
             os.path.join(directory, "openbook_qa.csv"), "w"
         ) as file:
@@ -210,7 +210,7 @@ class OpenBookQABaseDataset:
             answer_keys = ["A", "B", "C", "D"]
             for answer_tokens, preprocessed in zip(tokens, self.test_data):
                 answer = self.tokenizer.decode(answer_tokens, skip_special_tokens=True)
-                for i, choice in enumerate(preprocessed["choices"]):
+                for i, choice in enumerate(choices):
                     if answer == choice:
                         file.write(f"{preprocessed['id']},{answer_keys[i]}\n")
                         break
@@ -220,24 +220,24 @@ class OpenBookQABaseDataset:
                         # Gestalt Pattern Matching
                         # https://en.wikipedia.org/wiki/Gestalt_Pattern_Matching
                         possible_matches = difflib.get_close_matches(
-                            answer, preprocessed["choices"], n=1
+                            answer, choices, n=1
                         )
                         if not len(possible_matches) == 0:
                             print(
                                 f"Using answer {possible_matches[0]} for output {answer}, "
                                 f"question: {preprocessed['text_question']}, "
-                                f"choices: {preprocessed['choices']}"
+                                f"choices: {choices}"
                             )
                             is_missing = False
                             file.write(
                                 f"{preprocessed['id']},"
-                                f"{answer_keys[preprocessed['choices'].index(possible_matches[0])]}\n"
+                                f"{answer_keys[choices.index(possible_matches[0])]}\n"
                             )
 
                     if is_missing:
                         missing += 1
                         print(
-                            f"Missing answer, choices: {preprocessed['choices']}, "
+                            f"Missing answer, choices: {choices}, "
                             f"answer: {answer}, using default A as answer."
                         )
                         file.write(f"{preprocessed['id']},A")
@@ -539,7 +539,6 @@ class OpenBookQAAugmentDataset(OpenBookQABaseDataset):
             )
 
             answer = self.tokenizer.encode(
-                # normalize_t5_input(data["text_answer"]),
                 normalize_t5_input(["(A)", "(B)", "(C)", "(D)"][data["label"]]),
                 padding="max_length",
                 max_length=16,
