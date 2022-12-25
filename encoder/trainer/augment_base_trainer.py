@@ -33,7 +33,7 @@ class AugmentBaseTrainer(pl.LightningModule):
         stage_result_path="./",
         is_distributed=False,
     ):
-        super().__init__()
+        super(AugmentBaseTrainer, self).__init__()
         self.save_hyperparameters()
         warnings.filterwarnings("ignore")
         fix_missing(config)
@@ -99,8 +99,7 @@ class AugmentBaseTrainer(pl.LightningModule):
             )
         return out.loss
 
-    # noinspection PyTypeChecker
-    def validation_step(self, batch: BatchEncoding, *_, **__):
+    def validation_or_test_step(self, batch: BatchEncoding, *_, **__):
         if "t5-" in self.config.base_type:
             out = self.model.generate(
                 batch["sentence"].to(self.real_device),
@@ -126,6 +125,10 @@ class AugmentBaseTrainer(pl.LightningModule):
                     token_type_ids=batch["type_ids"].to(self.real_device),
                 ).to(device="cpu", dtype=t.float32),
             }
+
+    # noinspection PyTypeChecker
+    def validation_step(self, *args, **kwargs):
+        return self.validation_or_test_step(*args, **kwargs)
 
     def validation_epoch_end(self, outputs):
         if self.is_distributed:
@@ -165,31 +168,7 @@ class AugmentBaseTrainer(pl.LightningModule):
                         print(f"{prefix}_{key}: {value}")
 
     def test_step(self, batch: BatchEncoding, _batch_idx):
-        if "t5-" in self.config.base_type:
-            out = self.model.generate(
-                batch["sentence"].to(self.real_device),
-                max_length=self.config.generate_length,
-                attention_mask=batch["mask"].to(self.real_device),
-                early_stopping=True,
-            )
-            result = t.full(
-                [out.shape[0], self.config.generate_length], self.tokenizer.pad_token_id
-            )
-            result[:, : out.shape[1]] = out.to(device="cpu", dtype=t.float32)
-            batch = batch.to("cpu")
-            return {
-                "batch": batch,
-                "result": result,
-            }
-        else:
-            return {
-                "batch": batch.to("cpu"),
-                "result": self.model.predict(
-                    input_ids=batch["sentence"].to(self.real_device),
-                    attention_mask=batch["mask"].to(self.real_device),
-                    token_type_ids=batch["type_ids"].to(self.real_device),
-                ).to(device="cpu", dtype=t.float32),
-            }
+        return self.validation_or_test_step(*args, **kwargs)
 
     def test_epoch_end(self, outputs):
         if self.is_distributed:

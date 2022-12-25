@@ -62,7 +62,7 @@ class CommonsenseQA2BaseDataset:
         """
         Needs to be overridden
         """
-        return {}
+        raise NotImplementedError()
 
     def validate_logits(self, batch: BatchEncoding, logits: t.Tensor):
         """

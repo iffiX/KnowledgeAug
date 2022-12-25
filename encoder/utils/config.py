@@ -27,6 +27,18 @@ class AugmentBaseConfig(BaseModel):
     device_map: Optional[Dict[int, List[int]]] = None
 
 
+class BespokeBaseConfig(BaseModel):
+    bespoke_optimizer_class: str = "AdamW"
+    bespoke_learning_rate: float = 5e-6
+    bespoke_l2_regularization: float = 0
+    bespoke_top_k: int = 12
+    bespoke_min_similarity: float = 0.58
+    bespoke_iterations: int = 2
+    bespoke_batch_size: int = 4
+    bespoke_accumulate_grad_batches: int = 1
+    bespoke_base_checkpoint: str = ""
+
+
 class SampleBaseConfig(BaseModel):
     skip: bool = False
     load: bool = False
@@ -99,6 +111,12 @@ class OpenBookQAAugmentTrainConfig(AugmentBaseConfig):
     sample_type: str = "mc"
 
 
+class OpenBookQABespokeAugmentTrainConfig(
+    BespokeBaseConfig, OpenBookQAAugmentTrainConfig
+):
+    pass
+
+
 class QASCSingleChoiceSampleTrainConfig(SampleBaseConfig):
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
@@ -146,6 +164,10 @@ class QASCAugmentTrainConfig(AugmentBaseConfig):
     augment_method: str = "raw_decode"
     augment_use_parts: str = "all"
     sample_type: str = "sc"
+
+
+class QASCBespokeAugmentTrainConfig(BespokeBaseConfig, QASCAugmentTrainConfig):
+    pass
 
 
 class CommonsenseQA2AugmentTrainConfig(AugmentBaseConfig):
@@ -230,9 +252,11 @@ def stage_name_to_config(name: str, config_dict: dict = None):
         "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainConfig,
         "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainConfig,
         "openbook_qa_augment": OpenBookQAAugmentTrainConfig,
+        "openbook_qa_bespoke_augment": OpenBookQABespokeAugmentTrainConfig,
         "qasc_sc_sample": QASCSingleChoiceSampleTrainConfig,
         "qasc_mc_sample": QASCMultipleChoiceSampleTrainConfig,
         "qasc_augment": QASCAugmentTrainConfig,
+        "qasc_bespoke_augment": QASCBespokeAugmentTrainConfig,
         "commonsense_qa2_augment": CommonsenseQA2AugmentTrainConfig,
         "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainConfig,
         "social_iqa_augment": SocialIQAAugmentTrainConfig,

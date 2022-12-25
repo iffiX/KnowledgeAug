@@ -5,15 +5,18 @@ import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
+from .bespoke_base_trainer import BespokeBaseTrainer
 from .social_iqa_augment_trainer import SocialIQAAugmentTrainer
 from .social_iqa_sample_trainer import SocialIQASingleChoiceSampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
 from .openbook_qa_sc_sample_trainer import OpenBookQASingleChoiceSampleTrainer
 from .openbook_qa_mc_sample_trainer import OpenBookQAMultipleChoiceSampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
+from .openbook_qa_bespoke_augment_trainer import OpenBookQABespokeAugmentTrainer
 from .qasc_sc_sample_trainer import QASCSingleChoiceSampleTrainer
 from .qasc_mc_sample_trainer import QASCMultipleChoiceSampleTrainer
 from .qasc_augment_trainer import QASCAugmentTrainer
+from .qasc_bespoke_augment_trainer import QASCBespokeAugmentTrainer
 from pytorch_lightning import seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint, EarlyStopping
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -26,9 +29,11 @@ stage_name_to_trainer_map = {
     "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainer,
     "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,
+    "openbook_qa_bespoke_augment": OpenBookQABespokeAugmentTrainer,
     "qasc_sc_sample": QASCSingleChoiceSampleTrainer,
     "qasc_mc_sample": QASCMultipleChoiceSampleTrainer,
     "qasc_augment": QASCAugmentTrainer,
+    "qasc_bespoke_augment": QASCBespokeAugmentTrainer,
 }
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -228,17 +233,18 @@ def run(config: Config, stage_index: int, mode: str = "train"):
     elif mode in ("validate", "test"):
         logging.info("Validating." if mode == "validate" else "Testing")
 
-        checkpoint = find_checkpoint(checkpoint_path)
-        if checkpoint is None:
-            raise RuntimeError("Cannot find a valid checkpoint.")
+        if issubclass(stage_name_to_trainer_map[stage], BespokeBaseTrainer):
+            stage_trainer = stage_name_to_trainer(
+                stage, stage_config, stage_result_path, is_distributed
+            )
         else:
-            logging.info(f"Using checkpoint {checkpoint}")
+            checkpoint = find_checkpoint(checkpoint_path)
+            if checkpoint is None:
+                raise RuntimeError("Cannot find a valid checkpoint.")
+            else:
+                logging.info(f"Using checkpoint {checkpoint}")
+            stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
 
-        # model` must be provided to `trainer.test()` when it hasn't been passed
-        # in a previous run.
-        # the ckpt_path in test will be ignored in this case.
-        # and must perform manual load
-        stage_trainer = stage_name_to_checkpoint(stage, checkpoint)
         stage_trainer.current_mode = mode
 
         is_distributed = (isinstance(config.gpus, list) and len(config.gpus) > 1) or (

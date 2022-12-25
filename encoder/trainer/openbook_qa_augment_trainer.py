@@ -20,7 +20,7 @@ class OpenBookQAAugmentTrainer(AugmentBaseTrainer):
         stage_result_path="./",
         is_distributed=False,
     ):
-        super().__init__(
+        super(OpenBookQAAugmentTrainer, self).__init__(
             4,
             config=config,
             stage_result_path=stage_result_path,
