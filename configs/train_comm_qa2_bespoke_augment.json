@@ -1,0 +1,35 @@
+{
+    "configs": [
+        {
+            "accumulate_grad_batches": 2,
+            "base_type": "microsoft/deberta-v3-large",
+            "batch_size": 4,
+            "epochs": 20,
+            "l2_regularization": 0,
+            "learning_rate": 5e-6,
+            "max_seq_length": 300,
+            "augment_method": "standard",
+            "scheduler_warmup_proportion": 0,
+            "load": false,
+            "optimizer_class": "AdamW",
+            "seed": 697474,
+            "save": true,
+
+            "bespoke_base_checkpoint": "/home/mlw0504/data/workspace/knowledge_aug/train_commonsense_qa2_augment/0/checkpoint/epoch=03-accuracy-accuracy=0.720.ckpt.bak",
+            "bespoke_optimizer_class": "AdamW",
+            "bespoke_learning_rate": 5e-6,
+            "bespoke_l2_regularization": 0,
+            "bespoke_top_k": 8,
+            "bespoke_min_similarity": 0.63,
+            "bespoke_accumulate_grad_batches": 1,
+            "bespoke_iterations": 2,
+            "bespoke_batch_size": 8
+        }
+    ],
+    "early_stopping_patience": 15,
+    "gpus": [0],
+    "stages": [
+        "commonsense_qa2_bespoke_augment"
+    ],
+    "working_directory": "/home/mlw0504/data/workspace/knowledge_aug/train_commonsense_qa2_bespoke_augment"
+}

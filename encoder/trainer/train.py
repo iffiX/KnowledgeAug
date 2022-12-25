@@ -1,14 +1,15 @@
 import re
 import os
-import json
 import logging
 import torch as t
 import pytorch_lightning as pl
 from ..utils.config import *
 from .bespoke_base_trainer import BespokeBaseTrainer
 from .social_iqa_augment_trainer import SocialIQAAugmentTrainer
+from .social_iqa_bespoke_augment_trainer import SocialIQABespokeAugmentTrainer
 from .social_iqa_sample_trainer import SocialIQASingleChoiceSampleTrainer
 from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
+from .commonsense_qa2_bespoke_augment_trainer import CommonsenseQA2BespokeAugmentTrainer
 from .openbook_qa_sc_sample_trainer import OpenBookQASingleChoiceSampleTrainer
 from .openbook_qa_mc_sample_trainer import OpenBookQAMultipleChoiceSampleTrainer
 from .openbook_qa_augment_trainer import OpenBookQAAugmentTrainer
@@ -25,7 +26,9 @@ from pytorch_lightning.plugins import DDPPlugin, DeepSpeedPlugin
 stage_name_to_trainer_map = {
     "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainer,
     "social_iqa_augment": SocialIQAAugmentTrainer,
+    "social_iqa_bespoke_augment": SocialIQABespokeAugmentTrainer,
     "commonsense_qa2_augment": CommonsenseQA2AugmentTrainer,
+    "commonsense_qa2_bespoke_augment": CommonsenseQA2BespokeAugmentTrainer,
     "openbook_qa_sc_sample": OpenBookQASingleChoiceSampleTrainer,
     "openbook_qa_mc_sample": OpenBookQAMultipleChoiceSampleTrainer,
     "openbook_qa_augment": OpenBookQAAugmentTrainer,

@@ -182,6 +182,12 @@ class CommonsenseQA2AugmentTrainConfig(AugmentBaseConfig):
     augment_use_parts: str = "all"
 
 
+class CommonsenseQA2BespokeAugmentTrainConfig(
+    BespokeBaseConfig, CommonsenseQA2AugmentTrainConfig
+):
+    pass
+
+
 class SocialIQASingleChoiceSampleTrainConfig(SampleBaseConfig):
     load_worker_num: Optional[int] = 0
     load_prefetch_per_worker: Optional[int] = 2
@@ -211,6 +217,12 @@ class SocialIQAAugmentTrainConfig(AugmentBaseConfig):
     use_augment: bool = True
     augment_method: str = "raw_decode"
     augment_use_parts: str = "all"
+
+
+class SocialIQABespokeAugmentTrainConfig(
+    BespokeBaseConfig, SocialIQAAugmentTrainConfig
+):
+    pass
 
 
 class Config(BaseModel):
@@ -258,8 +270,10 @@ def stage_name_to_config(name: str, config_dict: dict = None):
         "qasc_augment": QASCAugmentTrainConfig,
         "qasc_bespoke_augment": QASCBespokeAugmentTrainConfig,
         "commonsense_qa2_augment": CommonsenseQA2AugmentTrainConfig,
+        "commonsense_qa2_bespoke_augment": CommonsenseQA2BespokeAugmentTrainConfig,
         "social_iqa_sc_sample": SocialIQASingleChoiceSampleTrainConfig,
         "social_iqa_augment": SocialIQAAugmentTrainConfig,
+        "social_iqa_bespoke_augment": SocialIQABespokeAugmentTrainConfig,
     }
     if name in stage_name_to_config_map:
         config_dict = config_dict or {}

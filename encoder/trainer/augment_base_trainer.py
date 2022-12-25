@@ -167,7 +167,7 @@ class AugmentBaseTrainer(pl.LightningModule):
                     for key, value in metrics.items():
                         print(f"{prefix}_{key}: {value}")
 
-    def test_step(self, batch: BatchEncoding, _batch_idx):
+    def test_step(self, *args, **kwargs):
         return self.validation_or_test_step(*args, **kwargs)
 
     def test_epoch_end(self, outputs):

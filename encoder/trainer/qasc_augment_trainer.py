@@ -72,14 +72,7 @@ class QASCAugmentTrainer(AugmentBaseTrainer):
         )
 
     def test_dataloader(self):
-        return DataLoader(
-            dataset=self.dataset.test_dataset,
-            num_workers=self.config.load_worker_num,
-            prefetch_factor=self.config.load_prefetch_per_worker,
-            batch_size=self.config.batch_size,
-            collate_fn=collate_function_dict_to_batch_encoding,
-            worker_init_fn=set_worker_sharing_strategy,
-        )
+        return DataLoader(dataset=self.dataset.test_dataset, **self.dataloader_args,)
 
     def load_augment_contexts(self):
         dataset = QASCBaseDataset(tokenizer=None)

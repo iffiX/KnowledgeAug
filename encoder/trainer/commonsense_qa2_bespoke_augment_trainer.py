@@ -1,21 +1,23 @@
 import os
-from encoder.dataset.qasc import QASCBaseDataset
+from encoder.dataset.commonsense_qa2 import CommonsenseQA2BaseDataset
 from encoder.utils.file import TorchCache
-from encoder.utils.config import QASCBespokeAugmentTrainConfig
+from encoder.utils.config import CommonsenseQA2BespokeAugmentTrainConfig
 from encoder.utils.settings import preprocess_cache_dir
 from .bespoke_base_trainer import BespokeBaseTrainer
-from .qasc_augment_trainer import QASCAugmentTrainer
+from .commonsense_qa2_augment_trainer import CommonsenseQA2AugmentTrainer
 
 
-class QASCBespokeAugmentTrainer(BespokeBaseTrainer, QASCAugmentTrainer):
+class CommonsenseQA2BespokeAugmentTrainer(
+    BespokeBaseTrainer, CommonsenseQA2AugmentTrainer
+):
     def __init__(
         self,
-        config: QASCBespokeAugmentTrainConfig,
+        config: CommonsenseQA2BespokeAugmentTrainConfig,
         stage_result_path="./",
         is_distributed=False,
     ):
         BespokeBaseTrainer.__init__(self, config=config)
-        QASCAugmentTrainer.__init__(
+        CommonsenseQA2AugmentTrainer.__init__(
             self,
             config=config,
             stage_result_path=stage_result_path,
@@ -24,7 +26,7 @@ class QASCBespokeAugmentTrainer(BespokeBaseTrainer, QASCAugmentTrainer):
 
     def load_similarity_embedding(self):
         def generate():
-            dataset = QASCBaseDataset(tokenizer=None)
+            dataset = CommonsenseQA2BaseDataset(tokenizer=None)
             texts = []
             ids = []
             for d in dataset.train_data + dataset.validate_data + dataset.test_data:
@@ -36,13 +38,15 @@ class QASCBespokeAugmentTrainer(BespokeBaseTrainer, QASCAugmentTrainer):
             )
 
         with TorchCache(
-            os.path.join(preprocess_cache_dir, f"qasc_similarity_embedding.pt"),
+            os.path.join(
+                preprocess_cache_dir, f"commonsense_qa2_similarity_embedding.pt"
+            ),
             generate_func=generate,
         ) as cache:
             return cache.data
 
     def load_model_state_dict(self):
-        augment_trainer = QASCAugmentTrainer.load_from_checkpoint(
+        augment_trainer = CommonsenseQA2AugmentTrainer.load_from_checkpoint(
             self.config.bespoke_base_checkpoint, map_location="cpu"
         )
         return augment_trainer.model.state_dict()
